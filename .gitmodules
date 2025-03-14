@@ -1,0 +1,3 @@
+[submodule "Genesis"]
+	path = Genesis
+	url = git@github.com:Genesis-Embodied-AI/Genesis.git
