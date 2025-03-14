@@ -21,8 +21,8 @@ plane = scene.add_entity(
     gs.morphs.Plane(),
 )
 
-BOTTLE_RADIUS = 0.035
-BOTTLE_HEIGHT = 0.075
+BOTTLE_RADIUS = 0.03
+BOTTLE_HEIGHT = 0.08
 BOX_WIDTH, BOX_HEIGHT = 0.75, 0.12
 
 box = scene.add_entity(
@@ -39,8 +39,10 @@ kinova = scene.add_entity(
     gs.morphs.URDF(
         file=str(pl.Path(__file__).parent / 'gen3_lite_2f_robotiq_85.urdf'),
         fixed=True,
+        convexify=False,
         pos=(0.0, 0.0, 0.05), # raise to account for table mount
     ),
+    vis_mode="collision"
 
     # gs.morphs.MJCF(file="/home/j/workspace/genesis_pickaplace/005_tomato_soup_can/google_512k/kinbody.xml"),
 )
@@ -60,7 +62,7 @@ bottle = scene.add_entity(
         radius=BOTTLE_RADIUS,
         height=BOTTLE_HEIGHT,
     ),
-    visualize_contact=True,
+    # visualize_contact=True,
 )
 
 goal_bottle = scene.add_entity(
@@ -71,7 +73,7 @@ goal_bottle = scene.add_entity(
         radius=BOTTLE_RADIUS,
         height=BOTTLE_HEIGHT,
     ),
-    visualize_contact=True,
+    # visualize_contact=True,
 )
 
 
