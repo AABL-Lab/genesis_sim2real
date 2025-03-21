@@ -6,6 +6,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-v", "--vis", action="store_true", default=False)
 parser.add_argument("-d", "--debug", action="store_true", default=False)
 parser.add_argument("-p", "--position", type=int, default=-1)
+parser.add_argument("-r", "--radius", type=float, default=0.03)
+parser.add_argument("-f", "--friction", type=float, default=0.5)
 args = parser.parse_args()
 
 assert args.position in [-1, 0, 1, 2], "Position must be -1, 0, 1, or 2"
@@ -55,11 +57,11 @@ POSITION_2 = (0.4381, -0.2, 0.05)
 
 
 bottle = scene.add_entity(
-    material=gs.materials.Rigid(rho=2000,
-                                friction=0.2),
+    material=gs.materials.Rigid(rho=3000,
+                                friction=args.friction),
     morph=gs.morphs.Cylinder(
         pos=POSITION_0,
-        radius=BOTTLE_RADIUS,
+        radius=args.radius,
         height=BOTTLE_HEIGHT,
     ),
     # visualize_contact=True,
@@ -70,7 +72,7 @@ goal_bottle = scene.add_entity(
                             friction=2.0),
     morph=gs.morphs.Cylinder(
         pos=STATIC_BOTTLE_POSITION,
-        radius=BOTTLE_RADIUS,
+        radius=args.radius,
         height=BOTTLE_HEIGHT,
     ),
     # visualize_contact=True,
@@ -217,14 +219,17 @@ for path in dir.iterdir():
         # print(goal_bottle.get_contacts())
         scene.step()
 
+        # get the frame from the camera
+
+
         # cv2.waitKey(0)
 
         pos = kinova.get_dofs_position(dofs_idx_local=kdofs_idx)
         total_diff = sum([abs(jp - cjp) for jp, cjp in zip(pos, cmd)])
 
-        # if total_diff > 0.05: 
-        #     print(f"Failed to reach commanded position at step {step} with diff {total_diff}. repeating command")
-        #     cmd_idx -= 1
+        if total_diff > 0.01: 
+            # print(f"Failed to reach commanded position at step {step} with diff {total_diff}. repeating command")
+            cmd_idx -= 1
 
         if step % reward_check_period == 0:
             # bottles need to be in contact
