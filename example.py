@@ -2,15 +2,20 @@ import argparse
 import genesis as gs
 import time
 from collections import defaultdict
+import numpy as np
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-v", "--vis", action="store_true", default=False)
 parser.add_argument("-d", "--debug", action="store_true", default=False)
 parser.add_argument("-p", "--position", type=int, default=-1)
-parser.add_argument("-r", "--radius", type=float, default=0.03)
-parser.add_argument("-f", "--friction", type=float, default=0.5)
-parser.add_argument("-e", "--height", type=float, default=0.085)
-parser.add_argument("-o", "--rho", type=float, default=2000)
+parser.add_argument("-r", "--radius", type=float, default=0.0325)
+parser.add_argument("-f", "--friction", type=float, default=0.2)
+parser.add_argument("-e", "--height", type=float, default=0.1)
+parser.add_argument("-o", "--rho", type=float, default=2500)
+parser.add_argument("-i", "--index", type=int, default=-1)
+parser.add_argument("-x", "--starting-x", type=float, default=0.465)
+
+kp = 5
 
 args = parser.parse_args()
 
@@ -29,15 +34,16 @@ plane = scene.add_entity(
 
 BOTTLE_RADIUS = args.radius
 BOTTLE_HEIGHT = args.height
-BOX_WIDTH, BOX_HEIGHT = 0.75, 0.12
+BOX_WIDTH, BOX_HEIGHT = 0.75, 0.14
 
 box = scene.add_entity(
     material=gs.materials.Rigid(rho=1000,
-                                friction=0.5),
+                                friction=0.05,
+                                coup_friction=0.05,),
     morph=gs.morphs.Box(
-        size=(0.4, BOX_WIDTH, BOX_HEIGHT),
-        pos=(0.75, -BOX_WIDTH / 4, 0.05),
-    ),
+        size=(0.43, BOX_WIDTH, BOX_HEIGHT),
+        pos=(0.76, -BOX_WIDTH / 4, 0.02),
+    )
 )
 
 import pathlib as pl
@@ -47,15 +53,16 @@ kinova = scene.add_entity(
         file=str(pl.Path(__file__).parent / 'gen3_lite_2f_robotiq_85.urdf'),
         fixed=True,
         convexify=True,
-        pos=(0.0, 0.0, 0.05), # raise to account for table mount
+        pos=(0.0, 0.0, 0.055), # raise to account for table mount
     ),
+    material=gs.materials.Rigid(friction=0.5),
     vis_mode="collision"
 
     # gs.morphs.MJCF(file="/home/j/workspace/genesis_pickaplace/005_tomato_soup_can/google_512k/kinbody.xml"),
 )
 
-STATIC_BOTTLE_POSITION = (0.6, -0.2, 0.19)
-PX, PZ = 0.475, 0.05
+STATIC_BOTTLE_POSITION = (0.65, -0.225, 0.19)
+PX, PZ = args.starting_x, 0.05
 POSITION_0 = (PX, 0.1, PZ)
 POSITION_1 = (PX, -0.05, PZ)
 POSITION_2 = (PX, -0.2, PZ)
@@ -94,16 +101,17 @@ print(f"Kinova end effector: {eef}")
 scene.build()
 
 ############ Optional: set control gains ############
-import numpy as np
-print(f"Control gains for kinova:")
-print(kinova.get_dofs_kp(dofs_idx_local=kdofs_idx))
-print(kinova.get_dofs_kv(dofs_idx_local=kdofs_idx))
-print(kinova.get_dofs_force_range(dofs_idx_local=kdofs_idx))
 # set positional gains
-# franka.set_dofs_kp(
-#     kp             = np.array([4500, 4500, 3500, 3500, 2000, 2000, 2000, 100, 100]),
-#     dofs_idx_local = kdofs_idx,
-# )
+kinova.set_dofs_kp(
+    kp             = kp*np.array([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]),
+    dofs_idx_local = kdofs_idx,
+)
+
+if args.debug:
+    print(f"Control gains for kinova:")
+    print(kinova.get_dofs_kp(dofs_idx_local=kdofs_idx))
+    print(kinova.get_dofs_kv(dofs_idx_local=kdofs_idx))
+    print(kinova.get_dofs_force_range(dofs_idx_local=kdofs_idx))
 # # set velocity gains
 # franka.set_dofs_kv(
 #     kv             = np.array([450, 450, 350, 350, 200, 200, 200, 10, 10]),
@@ -117,14 +125,14 @@ print(kinova.get_dofs_force_range(dofs_idx_local=kdofs_idx))
 # )
 
 print(f"Hard setting kinova joint positions")
-harcoded_start = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945, -1, 1, 0.6 , 0.6]
+harcoded_start = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945, -1, 1, 0.7 , 0.7]
 kinova.set_dofs_position(np.array(harcoded_start), kdofs_idx)
 
 
 gripper_open = np.array([-1.0, 1.0])
 gripper_closed = np.array([0.0, 0.0])
 
-reward_check_period = 30
+reward_check_period = 2
 
 positions = [POSITION_0, POSITION_1, POSITION_2]
 debug_spheres = scene.draw_debug_spheres(poss=positions, radius=0.05, color=(1, 1, 0, 0.5))  # Yellow
@@ -145,12 +153,18 @@ total_reward = trials_ran = 0
 
 # read the trial data
 dir = pl.Path('./inthewild_trials/')
-for path in dir.iterdir():
+for idx, path in enumerate(dir.iterdir()):
+    if args.index >= 0 and idx != args.index: continue
+
     path = str(path)
     if not path.endswith('episodes.npy'): continue
 
     ep_dict = np.load(path, allow_pickle=True).item()
     vel_cmd = ep_dict['vel_cmd']
+    # if len(vel_cmd) > 1000: 
+    #     print(f"Skipping episode {path} with {len(vel_cmd)} steps")
+    #     continue
+
     gripper_cmds = np.linspace(-1.0, 1.0, len(vel_cmd) + 1)
     gripper_pos = ep_dict['gripper_pos']
     cmd_idx = 0
@@ -173,7 +187,7 @@ for path in dir.iterdir():
             bottle.set_pos(POSITION_2)
         else: return False
 
-        if args.debug and uid != 235: return False
+        # if args.debug and uid != 235: return False
 
         print(f"Loaded episode {path} with {len(vel_cmd)} steps", end = ' ')
 
@@ -227,8 +241,8 @@ for path in dir.iterdir():
             right_fingertip_error = pos[-2] - harcoded_start[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > 0.05 else 0.0
             left_fingertip_error = pos[-1] - harcoded_start[-1]; left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > 0.05 else 0.0
 
-            output_force[0] = -2*right_error; output_force[2] = 1*right_fingertip_error
-            output_force[1] = -2*left_error; output_force[3] = 1*left_fingertip_error
+            output_force[0] = -kp*right_error; output_force[2] = kp*right_fingertip_error
+            output_force[1] = -kp*left_error; output_force[3] = kp*left_fingertip_error
 
             # print([f'{entry:1.1f}' for entry in output_force], f'{right_error:+1.2f}', f'{left_error:+1.2f}')
             kinova.control_dofs_force(output_force, dofs_idx_local=np.array(kdofs_idx[-4:]))
@@ -262,8 +276,8 @@ for path in dir.iterdir():
         pos = kinova.get_dofs_position(dofs_idx_local=kdofs_idx)
         total_diff = sum([abs(jp - cjp) for jp, cjp in zip(pos, cmd)])
 
-        if total_diff > 0.15:
-            if cmd_idx_count[cmd_idx] > 50:
+        if total_diff > 0.075:
+            if cmd_idx_count[cmd_idx] > 10:
                 print(f"Failed to reach commanded position at step {step} with diff {total_diff}. Next command after {cmd_idx_count[cmd_idx]} steps.")
             else:
                 if args.debug:
@@ -297,9 +311,18 @@ for path in dir.iterdir():
                     print(f"~~~~~Success at step {step}~~~~~~")
                     break
         step += 1
+        if step > 3000: 
+            print(f"Breaking after {step} steps", end=' ')
+            break
     if reward == 0:
-        print(f"~~~~~Failed~~~~~~")
-print(f"Total reward: {total_reward} out of possible {trials_ran}. Success rate: {total_reward / trials_ran:1.2%}")
+        bottle_pos = bottle.get_pos().cpu().numpy()
+        target_x, target_y, target_z = bottle_pos[0], bottle_pos[1], bottle_pos[2]
+        goal_pos = goal_bottle.get_pos().cpu().numpy()
+        goal_x, goal_y, goal_z = goal_pos[0], goal_pos[1], goal_pos[2]
+        distance = np.linalg.norm([target_x - goal_x, target_y - goal_y])
+        print(f"~~~~~Failed~~~~~~ with xy_distance {distance:1.2f} dz {target_z - goal_z:1.2f}")
+
+print(f"Total reward: {total_reward} out of possible {trials_ran}. Success rate: {total_reward / trials_ran:1.2%}. Final distance from target to goal: {distance:1.2f}")
 results_dict = {
     'total_reward': total_reward,
     'trials_ran': trials_ran,
