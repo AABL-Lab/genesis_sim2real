@@ -38,11 +38,11 @@ BOX_WIDTH, BOX_HEIGHT = 0.75, 0.14
 
 box = scene.add_entity(
     material=gs.materials.Rigid(rho=1000,
-                                friction=0.05,
-                                coup_friction=0.05,),
+                                friction=0.05,),
+                                # coup_friction=0.05,),
     morph=gs.morphs.Box(
         size=(0.43, BOX_WIDTH, BOX_HEIGHT),
-        pos=(0.76, -BOX_WIDTH / 4, 0.02),
+        pos=(0.78, -BOX_WIDTH / 4, 0.02),
     )
 )
 
@@ -125,12 +125,8 @@ if args.debug:
 # )
 
 print(f"Hard setting kinova joint positions")
-harcoded_start = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945, -1, 1, 0.7 , 0.7]
+harcoded_start = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945, -1, 1, 0.5 , 0.5]
 kinova.set_dofs_position(np.array(harcoded_start), kdofs_idx)
-
-
-gripper_open = np.array([-1.0, 1.0])
-gripper_closed = np.array([0.0, 0.0])
 
 reward_check_period = 2
 
@@ -167,8 +163,9 @@ for idx, path in enumerate(dir.iterdir()):
 
     gripper_cmds = np.linspace(-1.0, 1.0, len(vel_cmd) + 1)
     gripper_pos = ep_dict['gripper_pos']
-    cmd_idx = 0
 
+    cmd_idx = 0
+    discovered_bottle_pos = None
 
     def setup():
         kinova.set_dofs_position(np.array(harcoded_start), kdofs_idx)
@@ -176,7 +173,9 @@ for idx, path in enumerate(dir.iterdir()):
         goal_bottle.set_quat([1, 0, 0, 0])
 
         uid = int(path.split('/')[-1].split('_')[0])
-        if uid in TRIALS_POSITION_0: 
+        if discovered_bottle_pos is not None:
+            bottle.set_pos(discovered_bottle_pos)
+        elif uid in TRIALS_POSITION_0: 
             if args.position >= 0 and args.position != 0: return False
             bottle.set_pos(POSITION_0)
         elif uid in TRIALS_POSITION_1:
@@ -226,7 +225,6 @@ for idx, path in enumerate(dir.iterdir()):
 
         # print the distance from the current position to the commanded position
 
-        kinova.control_dofs_position(cmd, dofs_idx_local=kdofs_idx[:len(cmd)])
         if cmd_idx < len(gripper_pos): # TODO: Don't just close the gripper, control with force control. Make is to the motor command stops when you get a high enough force back on the joint.
             # map from 0, 100 to -1, 0 for the left finger and 0, 100 to 0, 1 for the right finger
             # motor_cmd = (100 - gripper_pos[cmd_idx][0]) / 100
@@ -235,6 +233,17 @@ for idx, path in enumerate(dir.iterdir()):
             
             output_force = [0., 0., 0., 0.]
             motor_cmd = (100 - gripper_pos[cmd_idx][0]) / 100
+
+            if gripper_pos[cmd_idx][0] > 50 and discovered_bottle_pos is None:
+                # calculate the average position of the base fingers (index -3, and -4)
+                gp = kinova.get_links_pos()[-4:].cpu().numpy()
+                mean_gripper_pos = np.mean(gp, axis=0)
+                discovered_bottle_pos = mean_gripper_pos
+                # add a centimeter to the x position of the gripper
+                discovered_bottle_pos[0] += 0.015; discovered_bottle_pos[2] = PZ
+                # print(f"Setting gripper pos to {mean_gripper_pos} and resetting task")
+                setup(); cmd_idx = 0; cmd_idx_count = defaultdict(int)
+                continue
 
             right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > 0.05 else 0.0
             left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > 0.05 else 0.0
@@ -246,6 +255,7 @@ for idx, path in enumerate(dir.iterdir()):
 
             # print([f'{entry:1.1f}' for entry in output_force], f'{right_error:+1.2f}', f'{left_error:+1.2f}')
             kinova.control_dofs_force(output_force, dofs_idx_local=np.array(kdofs_idx[-4:]))
+        kinova.control_dofs_position(cmd, dofs_idx_local=kdofs_idx[:len(cmd)])
 
         # def apply_force_cmd(f):
         #     # apply a force to the end effector
@@ -307,8 +317,13 @@ for idx, path in enumerate(dir.iterdir()):
                     #     'reached': cmd_idx
                     # }
                     # np.save(path, results_dict)
+                    bottle_pos = bottle.get_pos().cpu().numpy()
+                    target_x, target_y, target_z = bottle_pos[0], bottle_pos[1], bottle_pos[2]
+                    goal_pos = goal_bottle.get_pos().cpu().numpy()
+                    goal_x, goal_y, goal_z = goal_pos[0], goal_pos[1], goal_pos[2]
+                    distance = np.linalg.norm([target_x - goal_x, target_y - goal_y])
 
-                    print(f"~~~~~Success at step {step}~~~~~~")
+                    print(f"~~~~~Success at step {step}~~~~~~ with xy_distance {distance:1.2f} dz {target_z - goal_z:1.2f}")
                     break
         step += 1
         if step > 3000: 
