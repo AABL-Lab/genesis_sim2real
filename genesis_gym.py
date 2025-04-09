@@ -15,15 +15,30 @@ POSITION_0 = torch.tensor((PX, 0.1, PZ))
 POSITION_1 = torch.tensor((PX, -0.05, PZ))
 POSITION_2 = torch.tensor((PX, -0.2, PZ))
 
+
+def _normalize_action(action):
+    """
+    Normalize the action from the action space to the range [-1, 1].
+    """
+    action_space = GenesisGym.action_space
+    action = (action - action_space.low) / (action_space.high - action_space.low)
+    return 2 * action - 1
+
+def _unnormalize_action(action, action_space):
+    """
+    Unnormalize the action from the range [-1, 1] to the action space.
+    """
+    action = (action + 1) / 2 * (action_space.high - action_space.low) + action_space.low
+    return action
+
 class GenesisDemoHolder:
     """
     Class to hold the demo data for the Genesis environment.
     """
-    def __init__(self):
+    def __init__(self, max_demos=float('inf')):
         self.dir = pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials/')
         self.paths = self.dir.glob('*episodes.npy')
 
-        max_demos = 10000
         self.demos = []
         for idx, path in enumerate(self.paths):
             if idx >= max_demos:
@@ -61,11 +76,17 @@ class GenesisDemoHolder:
         print(f"Demo {trial_id} loaded")
         return trial_id
 
-    def next_action(self):
+    def next_action(self, normalize=False):
         if self.action_idx >= len(self.demos[self.idx][1]):
             return None
         
         action = self.demos[self.idx][1][self.action_idx]
+
+        if normalize: # map from action space to [-1, 1]
+            # print(f'original action: {" ".join([f"{x:+.2f}" for x in action])}')
+            action = _normalize_action(action)
+            # print(f"\tnorm action: {' '.join([f'{x:+.2f}' for x in action])}")
+
         self.action_idx += 1
 
         return {'action': action}
@@ -75,6 +96,11 @@ class GenesisGym(gymnasium.Env):
     """
     Custom Gymnasium environment for the Genesis game.
     """
+    
+    # make a class wide action space
+    # Actions are 7 continuous actions. 6 dof joint angles, 1 gripper position
+    action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)
+    
     def __init__(self, args={}, size=(96, 96), use_truncated_in_return=False):
         super().__init__()
         self.args = {
@@ -88,8 +114,6 @@ class GenesisGym(gymnasium.Env):
 
         self.size = size
         # Define action and observation space
-        # Actions are 7 continuous actions. 6 dof joint angles, 1 gripper position
-        self.action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 100.]), shape=(7,), dtype=np.float32)
         # Observations are either an image, a state, or a combination
         self.observation_space = spaces.Dict({
             "image": spaces.Box(low=0, high=255, shape=(*size, 3), dtype=np.uint8),
@@ -108,6 +132,7 @@ class GenesisGym(gymnasium.Env):
         }
 
         self.use_truncated_in_return = use_truncated_in_return
+        self.force_sparse = True
 
         self.init_env()
 
@@ -240,8 +265,10 @@ class GenesisGym(gymnasium.Env):
         self.kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), self.kdofs_idx)
         self.scene.step()
         obs = self.get_obs()
-        ret = obs, {} if self.use_truncated_in_return else obs
-        #print(type(ret))
+        if self.use_truncated_in_return:
+            ret = obs, {}
+        else:
+            ret = obs
         return ret
     
     def get_obs(self, is_first=False):
@@ -280,6 +307,14 @@ class GenesisGym(gymnasium.Env):
         return np.array(output_force)
 
     def apply_action(self, action):
+
+        # map from -1, 1 to the action space
+        # print(f'\t gym action: {" ".join([f"{x:+.2f}" for x in action])}')
+        # if not self.use_truncated_in_return: # TODO: this should be handled in fastrl
+        #     unnorm_action = _unnormalize_action(action, self.action_space)
+        #     print(f"\t unnorm action: {' '.join([f'{x:+.2f}' for x in unnorm_action])}")
+        #     action = unnorm_action
+
         arm_pos, gripper_pos = action[:6], action[6:]
 
         gripper_force = self.calc_gripper_force(gripper_pos)
@@ -297,10 +332,12 @@ class GenesisGym(gymnasium.Env):
         distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
 
         reward = -distance.item() # TODO: implement reward function
-        done = reward > -0.1
+        done = reward > -0.1 and (bottle_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.09)) and (goal_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.09))
         if done: 
             print(f"SUCCESS!")
-            reward = 2000.0
+            reward = 1.0
+        elif self.force_sparse:
+            reward = 0.0
         # else:
         #     print(f"\treward: {reward:.2f} distance: {distance.item():.2f}")
 
@@ -332,14 +369,27 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Genesis Gym Environment')
     parser.add_argument('--vis', action='store_true', help='Enable visualization')
-    parser.add_argument('--radius', type=float, default=0.025, help='Bottle radius')
+    parser.add_argument('--radius', type=float, default=0.035, help='Bottle radius')
     parser.add_argument('-e', '--height', type=float, default=0.085, help='Bottle height')
     parser.add_argument('-o', '--rho', type=float, default=1000, help='Density of the bottle')
     parser.add_argument('--friction', type=float, default=0.5, help='Friction of the bottle')
     parser.add_argument('--starting_x', type=float, default=0.65, help='Starting x position of the bottle')
+    parser.add_argument('--max-demos', type=int, default=1e7, help='Max number of demos to load')
     args = parser.parse_args()
     
-    demo_player = GenesisDemoHolder()
+
+    normalize = True
+    demo_player = GenesisDemoHolder(max_demos=args.max_demos)
+
+    # print(GenesisGym.action_space, GenesisGym.action_space.low, GenesisGym.action_space.high)
+    # ### Action normalization / unnormalization
+    # while action := demo_player.next_action(normalize=False):
+    #     original_action = action['action']
+    #     normalized_action = _normalize_action(original_action, GenesisGym.action_space)
+    #     unnormalized_action = _unnormalize_action(normalized_action, GenesisGym.action_space)
+    #     print(f"orig, norm, unnorm: {' || '.join([f'{a:+.2f} {x:+.2f} {y:+.2f}' for a,x,y in zip(original_action, normalized_action, unnormalized_action)])}")
+
+    # exit()
 
 
     env = GenesisGym(args)
@@ -349,7 +399,7 @@ if __name__ == '__main__':
     trials = 1; successful_trials = 0
     while True:
         # action = env.action_space.sample()  # Sample random action
-        action = demo_player.next_action()
+        action = demo_player.next_action(normalize=False)
         if action is None:
             print(f"\t Max Reward {max_reward:+1.2f}")
             max_reward = float('-inf')
@@ -362,7 +412,7 @@ if __name__ == '__main__':
             env.reset(trial_id=trial_id)
         else:
             # print(action)
-            obs, reward, done, _ = env.step(action['action'])
+            obs, reward, done, *_ = env.step(action['action'])
             # env.render()
             if reward > max_reward:
                 max_reward = reward
