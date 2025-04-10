@@ -8,12 +8,20 @@ import cv2
 import torch
 from kinova import JOINT_NAMES as kinova_joint_names, EEF_NAME as kinova_eef_name, TRIALS_POSITION_0, TRIALS_POSITION_1, TRIALS_POSITION_2
 
-KINOVA_START_DOFS_POS = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945, -1, 1, 0.5 , 0.5]
-STATIC_BOTTLE_POSITION = torch.tensor((0.65, -0.225, 0.19))
+FINGERTIP_POS = 1.0
+KINOVA_START_DOFS_POS = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945, -1, 1, FINGERTIP_POS, FINGERTIP_POS]
+STATIC_BOTTLE_POSITION = torch.tensor((0.65, -0.225, 0.17))
 PX, PZ = 0.465, 0.05
 POSITION_0 = torch.tensor((PX, 0.1, PZ))
 POSITION_1 = torch.tensor((PX, -0.05, PZ))
 POSITION_2 = torch.tensor((PX, -0.2, PZ))
+
+## Default Args
+DEFAULT_RADIUS = 0.034
+DEFAULT_HEIGHT = 0.09
+DEFAULT_RHO = 2000
+DEFAULT_FRICTION = 0.5
+DEFAULT_STARTING_X = 0.65
 
 
 def _normalize_action(action):
@@ -104,10 +112,10 @@ class GenesisGym(gymnasium.Env):
     def __init__(self, args={}, size=(96, 96), use_truncated_in_return=False):
         super().__init__()
         self.args = {
-            'rho': args.rho if hasattr(args, 'rho') else 1000,
-            'radius': args.radius if hasattr(args, 'radius') else 0.0325,
-            'height': args.height if hasattr(args, 'height') else 0.085,
-            'friction': args.friction if hasattr(args, 'friction') else 0.2,
+            'rho': args.rho if hasattr(args, 'rho') else DEFAULT_RHO,
+            'radius': args.radius if hasattr(args, 'radius') else DEFAULT_RADIUS,
+            'height': args.height if hasattr(args, 'height') else DEFAULT_HEIGHT,
+            'friction': args.friction if hasattr(args, 'friction') else DEFAULT_FRICTION,
             'vis': args.vis if hasattr(args, 'vis') else False,
             # 'starting_x': args.starting_x if hasattr(args, 'starting_x') else 0.65
             }
@@ -138,7 +146,7 @@ class GenesisGym(gymnasium.Env):
 
 
     def _max_episode_steps(self):
-        return 2000
+        return 3000
         # return 100
 
     def init_env(self):
@@ -156,14 +164,14 @@ class GenesisGym(gymnasium.Env):
         BOTTLE_HEIGHT = self.args['height']
         BOX_WIDTH, BOX_HEIGHT = 0.75, 0.14
 
-        box_pos = (0.78, -BOX_WIDTH / 4, 0.02)
-        box = scene.add_entity(
-            material=gs.materials.Rigid(rho=1000,
-                                        friction=0.05,),
+        self.box_pos = (0.78, -BOX_WIDTH / 4, 0.02)
+        self.box = scene.add_entity(
+            material=gs.materials.Rigid(rho=5000),
+                                        # friction=0.05),
                                         # coup_friction=0.05,),
             morph=gs.morphs.Box(
                 size=(0.43, BOX_WIDTH, BOX_HEIGHT),
-                pos=box_pos,
+                pos=self.box_pos,
             )
         )
 
@@ -183,7 +191,7 @@ class GenesisGym(gymnasium.Env):
                 convexify=True,
                 pos=(0.0, 0.0, 0.055), # raise to account for table mount
             ),
-            material=gs.materials.Rigid(friction=0.5),
+            material=gs.materials.Rigid(friction=1.0),
             vis_mode="collision"
 
             # gs.morphs.MJCF(file="/home/j/workspace/genesis_pickaplace/005_tomato_soup_can/google_512k/kinbody.xml"),
@@ -262,6 +270,7 @@ class GenesisGym(gymnasium.Env):
 
         self.bottle.set_pos(bottle_pos); self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
         self.goal_bottle.set_pos(STATIC_BOTTLE_POSITION); self.goal_bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
+        self.box.set_pos(self.box_pos); self.box.set_quat(torch.Tensor([1, 0, 0, 0]))
         self.kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), self.kdofs_idx)
         self.scene.step()
         obs = self.get_obs()
@@ -291,18 +300,18 @@ class GenesisGym(gymnasium.Env):
         reward, done = self.compute_reward(state)
         return {"image": image, "state": state, "reward": reward, "is_first": is_first, "is_last": done, "is_terminal": False}
     
-    def calc_gripper_force(self, cmd_gripper_pos):
+    def calc_gripper_force(self, cmd_gripper_pos, threshold=0.03):
         # Calculate the gripper force based on the gripper position
         pos = self.last_arm_dofs
-        output_force = [0., 0.] #, 0., 0.]
+        output_force = [0., 0., 0., 0.]
         motor_cmd = (100 - cmd_gripper_pos) / 100
-        right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > 0.05 else [0.0]
-        left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > 0.05 else [0.0]
-        #right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > 0.05 else 0.0
-        #left_fingertip_error = pos[-1] - KINOVA_START_DOFS_POS[-1]; left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > 0.05 else 0.0
+        right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
+        left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
+        right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > threshold else 0.0
+        left_fingertip_error = pos[-1] - KINOVA_START_DOFS_POS[-1]; left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > threshold else 0.0
 
-        output_force[0] = -self.kp*right_error[0]; # output_force[2] = self.kp*right_fingertip_error
-        output_force[1] = -self.kp*left_error[0]; # output_force[3] = self.kp*left_fingertip_error
+        output_force[0] = -self.kp*right_error[0]; output_force[2] = self.kp*right_fingertip_error
+        output_force[1] = -self.kp*left_error[0]; output_force[3] = self.kp*left_fingertip_error
         # print(output_force)
         return np.array(output_force)
 
@@ -323,7 +332,8 @@ class GenesisGym(gymnasium.Env):
         # gripper_force[3] = 2.0
         # print(f"Gripper force: {' '.join([f'{x:.2f}' for x in gripper_force])}")
 
-        self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
+        self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:]))
+        # self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
         self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
 
     def compute_reward(self, obs):
@@ -332,7 +342,7 @@ class GenesisGym(gymnasium.Env):
         distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
 
         reward = -distance.item() # TODO: implement reward function
-        done = reward > -0.1 and (bottle_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.09)) and (goal_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.09))
+        done = reward > -0.1 and (bottle_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.07)) and (goal_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.07))
         if done: 
             print(f"SUCCESS!")
             reward = 1.0
@@ -355,25 +365,15 @@ class GenesisGym(gymnasium.Env):
                 cv2.waitKey(1)
         return img
     
-    def playback_demo(self, demo, num_steps=10):
-        # Play back a demo
-        for i in range(num_steps):
-            action = demo['actions'][i]
-            self.apply_action(action)
-            self.scene.step()
-            obs = self.get_obs(is_first=(i == 0))
-            self.render()
-        return obs
-
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Genesis Gym Environment')
     parser.add_argument('--vis', action='store_true', help='Enable visualization')
-    parser.add_argument('--radius', type=float, default=0.035, help='Bottle radius')
-    parser.add_argument('-e', '--height', type=float, default=0.085, help='Bottle height')
-    parser.add_argument('-o', '--rho', type=float, default=1000, help='Density of the bottle')
-    parser.add_argument('--friction', type=float, default=0.5, help='Friction of the bottle')
-    parser.add_argument('--starting_x', type=float, default=0.65, help='Starting x position of the bottle')
+    parser.add_argument('--radius', type=float, default=DEFAULT_RADIUS, help='Bottle radius')
+    parser.add_argument('-e', '--height', type=float, default=DEFAULT_HEIGHT, help='Bottle height')
+    parser.add_argument('-o', '--rho', type=float, default=DEFAULT_RHO, help='Density of the bottle')
+    parser.add_argument('--friction', type=float, default=DEFAULT_FRICTION, help='Friction of the bottle')
+    parser.add_argument('--starting_x', type=float, default=DEFAULT_STARTING_X, help='Starting x position of the bottle')
     parser.add_argument('--max-demos', type=int, default=1e7, help='Max number of demos to load')
     args = parser.parse_args()
     
@@ -396,27 +396,32 @@ if __name__ == '__main__':
     obs = env.reset()
     done = False
     max_reward = float('-inf')
-    trials = 1; successful_trials = 0
+    trials = 1; successful_trials = 0; steps = 0; pickups = 0
     while True:
         # action = env.action_space.sample()  # Sample random action
         action = demo_player.next_action(normalize=False)
-        if action is None:
-            print(f"\t Max Reward {max_reward:+1.2f}")
+        if action is None or steps > env._max_episode_steps() or done:
+            bottleZ = env.bottle.get_pos().cpu().numpy()[2]
+            print(f"\t Max Reward {max_reward:+1.2f}. {bottleZ=}")
             max_reward = float('-inf')
             trial_id = demo_player.next_demo()
             if done: successful_trials += 1
+            if bottleZ > 0.15: pickups += 1
             if trial_id == -1:
                 print("No more demos")
                 break
-            trials += 1
+            trials += 1; steps = 0; done = False
             env.reset(trial_id=trial_id)
         else:
+            steps += 1
             # print(action)
             obs, reward, done, *_ = env.step(action['action'])
-            # env.render()
+            if args.vis: env.render(use_imshow=True)
             if reward > max_reward:
                 max_reward = reward
+            
             # if reward > -0.10:
             #     print(f"Reward: {reward}")
 
     print(f"Trials: {trials} Successful Trials: {successful_trials} Success Rate: {successful_trials/trials:.2%}")
+    print(f"Pickups: {pickups} Pickup Rate: {pickups/trials:.2%}")
