@@ -117,14 +117,17 @@ class GenesisGym(gymnasium.Env):
             'height': args.height if hasattr(args, 'height') else DEFAULT_HEIGHT,
             'friction': args.friction if hasattr(args, 'friction') else DEFAULT_FRICTION,
             'vis': args.vis if hasattr(args, 'vis') else False,
+            'grayscale': args.grayscale if hasattr(args, 'grayscale') else False,
             # 'starting_x': args.starting_x if hasattr(args, 'starting_x') else 0.65
             }
+
+        print(f"GenesisGym args: {self.args}")
 
         self.size = size
         # Define action and observation space
         # Observations are either an image, a state, or a combination
         self.observation_space = spaces.Dict({
-            "image": spaces.Box(low=0, high=255, shape=(*size, 3), dtype=np.uint8),
+            "image": spaces.Box(low=0, high=255, shape=(*size, 3 if not self.args['grayscale'] else 1), dtype=np.uint8),
             "state": spaces.Box(low=-np.inf, high=np.inf, shape=(10 + 3,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
             'reward': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
             'is_first': spaces.Box(low=0, high=1, shape=(), dtype=bool),
@@ -287,6 +290,11 @@ class GenesisGym(gymnasium.Env):
         image = image[0] # grab the rgb
         # resize the image to the desired size
         image = cv2.resize(image, self.size)
+
+        if self.args['grayscale']:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            image = np.expand_dims(image, axis=-1)
+
         # image = None
         # if not image:
         #     image = np.zeros((*self.size, 3), dtype=np.uint8)
