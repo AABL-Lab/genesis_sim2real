@@ -118,6 +118,7 @@ class GenesisGym(gymnasium.Env):
             'friction': args.friction if hasattr(args, 'friction') else DEFAULT_FRICTION,
             'vis': args.vis if hasattr(args, 'vis') else False,
             'grayscale': args.grayscale if hasattr(args, 'grayscale') else False,
+            'time_limit': args.time_limit if hasattr(args, 'time_limit') else 1500,
             # 'starting_x': args.starting_x if hasattr(args, 'starting_x') else 0.65
             }
 
@@ -149,7 +150,7 @@ class GenesisGym(gymnasium.Env):
 
 
     def _max_episode_steps(self):
-        return 3000
+        return self.args['time_limit']
         # return 100
 
     def init_env(self):
