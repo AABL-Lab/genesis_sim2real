@@ -106,9 +106,8 @@ class GenesisGym(gymnasium.Env):
     """
     
     # make a class wide action space
-    # Actions are 7 continuous actions. 6 dof joint angles, 1 gripper position
-    action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)
-    
+    action_space = spaces.Box(low=np.array([-1.0, -1.0, -1.0]), high=np.array([1.0, 1.0, 1.0]), shape=(3,), dtype=np.float32)
+
     def __init__(self, args={}, size=(96, 96), use_truncated_in_return=False):
         super().__init__()
         self.args = {
@@ -182,7 +181,6 @@ class GenesisGym(gymnasium.Env):
         self.kinova = kinova = scene.add_entity(
             gs.morphs.URDF(
                 file=str(pl.Path(__file__).parent / 'gen3_lite_2f_robotiq_85.urdf'),
-                # file=str(pl.Path(__file__).parent / 'gen3_lite_2f_robotiq_85_with_camera.urdf'),
                 fixed=True,
                 convexify=True,
                 pos=(0.0, 0.0, 0.055), # raise to account for table mount
@@ -361,7 +359,6 @@ class GenesisGym(gymnasium.Env):
 
     def apply_action(self, action):
 
-
         # map from -1, 1 to the action space
         # print(f'\t gym action: {" ".join([f"{x:+.2f}" for x in action])}')
         # if not self.use_truncated_in_return: # TODO: this should be handled in fastrl
@@ -376,6 +373,14 @@ class GenesisGym(gymnasium.Env):
         # gripper_force[2] = 2.0
         # gripper_force[3] = 2.0
         # print(f"Gripper force: {' '.join([f'{x:.2f}' for x in gripper_force])}")
+        links,po = self.kinova.forward_kinematics(arm_pos, ls_idx_local=self.kdofs_idx[-4])
+        eef_pos = eef_pos.cpu().numpy()
+
+        print(' '.join([f'{x:+.2f}' for x in eef_pos]))
+
+        self.scene.clear_debug_objects()
+        debug_spheres = self.scene.draw_debug_spheres(poss=eef_pos, radius=0.05, color=(1, 1, 0, 0.5))  # Yellow
+
 
         self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:]))
         # self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
