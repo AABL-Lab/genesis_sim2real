@@ -159,7 +159,7 @@ class GenesisGym(gymnasium.Env):
             show_viewer=self.args['vis'],
         )
 
-        plane = scene.add_entity(
+        self.plane = scene.add_entity(
             gs.morphs.Plane(),
         )
 
@@ -345,25 +345,31 @@ class GenesisGym(gymnasium.Env):
         self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
 
     def compute_reward(self, obs):
+        reward = 0.
         bottle_pos = self.bottle.get_pos()
-        goal_pos = self.goal_bottle.get_pos()
-        distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
 
-        reward = -distance.item() # TODO: implement reward function
-        done = reward > -0.1 and (bottle_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.07)) and (goal_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.07))
-        if done: 
+        # Cup to goal distance
+        # goal_pos = self.goal_bottle.get_pos()
+        # distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
+        # reward = -distance.item() # TODO: implement reward function
+        # done = reward > -0.1 and (bottle_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.07)) and (goal_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.07))
+        # cup slide contact
+
+        # Pick up the cup, and penalize for contact with the ground plane.
+        plane_contacts = self.kinova.get_contacts(self.plane)
+        if plane_contacts['position'].shape[0] > 0:
+            print(f"CONTACT with plane.")
+            reward = -1.0
+        elif bottle_pos[2].cpu().numpy().item() >= 0.14:
             print(f"SUCCESS!")
-            reward = 1.0
-        elif self.force_sparse:
-            reward = 0.0
-        # else:
-        #     print(f"\treward: {reward:.2f} distance: {distance.item():.2f}")
+            reward = 1.
+        ## pick up cup
 
-        return reward, done # TODO: implement reward function
+        done = abs(reward) > 0.
+        return reward, done
 
     def render(self, mode='human', use_imshow=False):
         # Render the scene
-        # if self.args.vis:
         img = None
         if mode == 'human':
             img = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
@@ -383,6 +389,7 @@ if __name__ == '__main__':
     parser.add_argument('--friction', type=float, default=DEFAULT_FRICTION, help='Friction of the bottle')
     parser.add_argument('--starting_x', type=float, default=DEFAULT_STARTING_X, help='Starting x position of the bottle')
     parser.add_argument('--max-demos', type=int, default=1e7, help='Max number of demos to load')
+    parser.add_argument('--random-agent', action='store_true', help='Use a random agent')
     args = parser.parse_args()
     
 
@@ -399,6 +406,15 @@ if __name__ == '__main__':
 
     # exit()
 
+    def get_action():
+        if args.random_agent:
+            return GenesisGym.action_space.sample()
+        else:
+            action = demo_player.next_action(normalize=False)
+            if action is None:
+                return None
+            return action['action']
+
 
     env = GenesisGym(args)
     obs = env.reset()
@@ -407,7 +423,7 @@ if __name__ == '__main__':
     trials = 1; successful_trials = 0; steps = 0; pickups = 0
     while True:
         # action = env.action_space.sample()  # Sample random action
-        action = demo_player.next_action(normalize=False)
+        action = get_action()
         if action is None or steps > env._max_episode_steps() or done:
             bottleZ = env.bottle.get_pos().cpu().numpy()[2]
             print(f"\t Max Reward {max_reward:+1.2f}. {bottleZ=}")
@@ -423,7 +439,7 @@ if __name__ == '__main__':
         else:
             steps += 1
             # print(action)
-            obs, reward, done, *_ = env.step(action['action'])
+            obs, reward, done, *_ = env.step(action)
             if args.vis: env.render(use_imshow=True)
             if reward > max_reward:
                 max_reward = reward
