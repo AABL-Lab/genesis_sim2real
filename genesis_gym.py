@@ -1,5 +1,6 @@
 import gymnasium
 from gymnasium import spaces
+from genesis.utils.geom import quat_to_xyz
 import numpy as np
 import random
 import genesis as gs
@@ -7,8 +8,9 @@ import pathlib as pl
 import cv2
 import torch
 from kinova import JOINT_NAMES as kinova_joint_names, EEF_NAME as kinova_eef_name, TRIALS_POSITION_0, TRIALS_POSITION_1, TRIALS_POSITION_2
+from matplotlib import pyplot as plt
 
-FINGERTIP_POS = 1.0
+FINGERTIP_POS = -0.9
 KINOVA_START_DOFS_POS = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945, -1, 1, FINGERTIP_POS, FINGERTIP_POS]
 STATIC_BOTTLE_POSITION = torch.tensor((0.65, -0.225, 0.17))
 PX, PZ = 0.465, 0.05
@@ -23,6 +25,8 @@ DEFAULT_RHO = 2000
 DEFAULT_FRICTION = 0.5
 DEFAULT_STARTING_X = 0.65
 
+global SUBSAMPLE_RATIO
+SUBSAMPLE_RATIO = 1
 
 def _normalize_action(action):
     """
@@ -44,25 +48,57 @@ class GenesisDemoHolder:
     Class to hold the demo data for the Genesis environment.
     """
     def __init__(self, max_demos=float('inf')):
-        self.dir = pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials/')
+        self.dir = pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials_eef/')
         self.paths = self.dir.glob('*episodes.npy')
 
         self.demos = []
         for idx, path in enumerate(self.paths):
             if idx >= max_demos:
                 break
-            demo = np.load(path, allow_pickle=True).item()
-            arm_pos = np.array(demo['vel_cmd'])
-            gripper_pos = np.array([entry[0] for entry in demo['gripper_pos']])
 
-            assert len(arm_pos) == len(gripper_pos), f"Arm pos and gripper pos lengths do not match: {len(arm_pos)} vs {len(gripper_pos)}"
+            # old 
+            # demo = np.load(path, allow_pickle=True).item()
+            # arm_pos = np.array(demo['vel_cmd'])
+            # gripper_pos = np.array([entry[0] for entry in demo['gripper_pos']])
+            # assert len(arm_pos) == len(gripper_pos), f"Arm pos and gripper pos lengths do not match: {len(arm_pos)} vs {len(gripper_pos)}"
 
             # add a dimension to the gripper_pos
-            gripper_pos = np.expand_dims(gripper_pos, axis=1)
+            # gripper_pos = np.expand_dims(gripper_pos, axis=1)
 
-            action = np.concatenate((arm_pos, gripper_pos), axis=1)
+            # action = np.concatenate((arm_pos, gripper_pos), axis=1)
+
+            # new
+            demo = np.load(path, allow_pickle=True)
+            # arm_pos = demo[:, :6]
+            # gripper_pos = demo[:, 6]
+            action = demo
             trial_id = str(path).split('_episodes')[0].split('/')[-1]
             self.demos.append((int(trial_id), action))
+
+        ## postprocess
+        for idx, (trial_id, d) in enumerate(self.demos):
+            if SUBSAMPLE_RATIO > 1:
+                # subsamples the n, d sequence to 1/10th of the original. Averages the action over the 10 samples.
+                subsampled_d = []
+                for i in range(1, len(d), SUBSAMPLE_RATIO):
+                    subsampled_d.append(np.mean(d[i-SUBSAMPLE_RATIO:i], axis=0))
+                self.demos[idx] = (trial_id, np.array(subsampled_d))
+
+            # calculate and plot the diff for each action dimension
+            # print(f"Demo {trial_id} loaded")
+            # print(f"Action shape: {d.shape}")
+            # diff_action = np.diff(d, axis=0)
+            # print(f"Diff action shape: {diff_action.shape}")
+            # # drop actions that are less than 0.02
+            # diff_action = diff_action[np.linalg.norm(diff_action, axis=1) > 0.02]
+
+            # sum_diff_action = np.sum(diff_action, axis=0)
+
+            # plt.hist(diff_action, bins=50, range=(-0.25, 0.25), alpha=0.5)
+            # plt.title(f"Demo {trial_id} Diff Action Histogram")
+            # plt.xlabel('Action Value')
+            # plt.ylabel('Frequency')
+            # plt.show()
 
         self.idx = 0
         self.action_idx = 0
@@ -98,6 +134,27 @@ class GenesisDemoHolder:
         self.action_idx += 1
 
         return {'action': action}
+    
+    def convert_joint_to_eef(self, genesis_arm, output_dir='./inthewild_trials_eef'):
+        assert '_eef' not in output_dir, f"Output directory {output_dir} already contains _eef"
+        output_dir = pl.Path(output_dir)
+        new_demos = []
+        for idx, (trial_id, d) in enumerate(self.demos):
+            joint_pos_theta = d[:, :6]
+            joint_pos, joint_quat = genesis_arm.forward_kinematics(torch.tensor(joint_pos_theta))
+            eef_pos = joint_pos[6].cpu().numpy()
+            eef_quat = joint_quat[6].cpu().numpy()
+            eef_euler = quat_to_xyz(eef_quat)
+            new_d = np.concatenate((eef_pos, eef_euler, d[:, 6:]), axis=-1)
+
+            # save the demo out
+            output_path = output_dir / f'{trial_id}_episodes.npy'
+            np.save(output_path, new_d)
+            # new_demos.append((trial_id, new_d))
+
+        # self.demos = new_demos
+        # self.save_demos(output_dir)
+            
 
 
 class GenesisGym(gymnasium.Env):
@@ -107,8 +164,11 @@ class GenesisGym(gymnasium.Env):
     
     # make a class wide action space
     # Actions are 7 continuous actions. 6 dof joint angles, 1 gripper position
-    action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)
+    # action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)
     
+    # actions are eef position, orientation, and gripper position
+    action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32) 
+
     def __init__(self, args={}, size=(96, 96), use_truncated_in_return=False):
         super().__init__()
         self.args = {
@@ -147,9 +207,11 @@ class GenesisGym(gymnasium.Env):
 
         self.init_env()
 
+        self.dp = []
+
 
     def _max_episode_steps(self):
-        return 3000
+        return 2000
         # return 100
 
     def init_env(self):
@@ -167,7 +229,7 @@ class GenesisGym(gymnasium.Env):
         BOTTLE_HEIGHT = self.args['height']
         BOX_WIDTH, BOX_HEIGHT = 0.75, 0.14
 
-        self.box_pos = (0.78, -BOX_WIDTH / 4, 0.02)
+        self.box_pos = torch.Tensor((0.78, -BOX_WIDTH / 4, 0.02))
         self.box = scene.add_entity(
             material=gs.materials.Rigid(rho=5000),
                                         # friction=0.05),
@@ -185,7 +247,6 @@ class GenesisGym(gymnasium.Env):
             GUI=True,
         )
 
-        import pathlib as pl
         # TODO: see if you can prevent the gripper from being convexified
         self.kinova = kinova = scene.add_entity(
             gs.morphs.URDF(
@@ -311,20 +372,19 @@ class GenesisGym(gymnasium.Env):
     def calc_gripper_force(self, cmd_gripper_pos, threshold=0.03):
         # Calculate the gripper force based on the gripper position
         pos = self.last_arm_dofs
-        output_force = [0., 0., 0., 0.]
+        output_force = [0., 0.] #, 0., 0.]
         motor_cmd = (100 - cmd_gripper_pos) / 100
         right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
         left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
         right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > threshold else 0.0
         left_fingertip_error = pos[-1] - KINOVA_START_DOFS_POS[-1]; left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > threshold else 0.0
 
-        output_force[0] = -self.kp*right_error[0]; output_force[2] = self.kp*right_fingertip_error
-        output_force[1] = -self.kp*left_error[0]; output_force[3] = self.kp*left_fingertip_error
+        output_force[0] = -self.kp*right_error[0];# output_force[2] = self.kp*right_fingertip_error
+        output_force[1] = -self.kp*left_error[0]; #output_force[3] = self.kp*left_fingertip_error
         # print(output_force)
         return np.array(output_force)
 
     def apply_action(self, action):
-
         # map from -1, 1 to the action space
         # print(f'\t gym action: {" ".join([f"{x:+.2f}" for x in action])}')
         # if not self.use_truncated_in_return: # TODO: this should be handled in fastrl
@@ -332,7 +392,8 @@ class GenesisGym(gymnasium.Env):
         #     print(f"\t unnorm action: {' '.join([f'{x:+.2f}' for x in unnorm_action])}")
         #     action = unnorm_action
 
-        arm_pos, gripper_pos = action[:6], action[6:]
+        # arm_pos, gripper_pos = action[:6], action[6:]
+        eef_pos, eef_euler, gripper_pos = action[:3], action[3:6], action[6:]
 
         gripper_force = self.calc_gripper_force(gripper_pos)
 
@@ -340,12 +401,23 @@ class GenesisGym(gymnasium.Env):
         # gripper_force[3] = 2.0
         # print(f"Gripper force: {' '.join([f'{x:.2f}' for x in gripper_force])}")
 
-        self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:]))
-        # self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
+        # calculate the current positions distance from the desired positions
+        current_position = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
+
+        eef_quat = gs.utils.geom.xyz_to_quat(eef_euler)
+        ik_joints = self.kinova.inverse_kinematics(self.kinova.get_link('end_effector_link'), pos=eef_pos, quat=eef_quat, rot_mask=[True, True, True])
+        arm_pos = ik_joints[:6]
+
+        dp = 0 #np.linalg.norm(current_position[:6] - arm_pos, ord=2, axis=-1)
+        self.dp.append(dp)
+
+        # self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:]))
+        self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
         self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
 
     def compute_reward(self, obs):
         reward = 0.
+        done = False
         bottle_pos = self.bottle.get_pos()
 
         # Cup to goal distance
@@ -358,14 +430,14 @@ class GenesisGym(gymnasium.Env):
         # Pick up the cup, and penalize for contact with the ground plane.
         plane_contacts = self.kinova.get_contacts(self.plane)
         if plane_contacts['position'].shape[0] > 0:
-            print(f"CONTACT with plane.")
-            reward = -1.0
+            # print(f"CONTACT with plane.")
+            reward -= 0.01
         elif bottle_pos[2].cpu().numpy().item() >= 0.14:
             print(f"SUCCESS!")
             reward = 1.
+            done = True
         ## pick up cup
 
-        done = abs(reward) > 0.
         return reward, done
 
     def render(self, mode='human', use_imshow=False):
@@ -390,7 +462,10 @@ if __name__ == '__main__':
     parser.add_argument('--starting_x', type=float, default=DEFAULT_STARTING_X, help='Starting x position of the bottle')
     parser.add_argument('--max-demos', type=int, default=1e7, help='Max number of demos to load')
     parser.add_argument('--random-agent', action='store_true', help='Use a random agent')
+    parser.add_argument('--subsample', type=int, default=SUBSAMPLE_RATIO, help='Subsample ratio for the demos')
     args = parser.parse_args()
+
+    SUBSAMPLE_RATIO = args.subsample
     
 
     normalize = True
@@ -418,23 +493,33 @@ if __name__ == '__main__':
 
     env = GenesisGym(args)
     obs = env.reset()
+
     done = False
-    max_reward = float('-inf')
+    max_reward = float('-inf'); reward = 0
     trials = 1; successful_trials = 0; steps = 0; pickups = 0
     while True:
         # action = env.action_space.sample()  # Sample random action
         action = get_action()
+
         if action is None or steps > env._max_episode_steps() or done:
             bottleZ = env.bottle.get_pos().cpu().numpy()[2]
             print(f"\t Max Reward {max_reward:+1.2f}. {bottleZ=}")
             max_reward = float('-inf')
             trial_id = demo_player.next_demo()
-            if done: successful_trials += 1
+            if reward > 0: successful_trials += 1
             if bottleZ > 0.15: pickups += 1
             if trial_id == -1:
                 print("No more demos")
                 break
             trials += 1; steps = 0; done = False
+
+            # write out a histogram of the dp
+            plt.hist(env.dp, bins=50, range=(0, 0.2), alpha=0.5)
+            plt.title(f"Demo {trial_id} DP Histogram")
+            plt.xlabel('DP')
+            plt.ylabel('Frequency')
+            plt.savefig(f'results/{trial_id}_ss{SUBSAMPLE_RATIO}_dp_histogram.png')
+
             env.reset(trial_id=trial_id)
         else:
             steps += 1
@@ -449,3 +534,12 @@ if __name__ == '__main__':
 
     print(f"Trials: {trials} Successful Trials: {successful_trials} Success Rate: {successful_trials/trials:.2%}")
     print(f"Pickups: {pickups} Pickup Rate: {pickups/trials:.2%}")
+
+
+    # Append the results to a file. Create it if it doesn't exist.
+    with open('results/results.txt', 'a') as f:
+        f.write(f"subsample ratio {SUBSAMPLE_RATIO} -- {successful_trials/trials:.2%}\n")
+        f.write(f"Trials: {trials} Successful Trials: {successful_trials} Success Rate: {successful_trials/trials:.2%}\n")
+        f.write(f"Pickups: {pickups} Pickup Rate: {pickups/trials:.2%}\n")
+        f.write(f"Max Reward: {max_reward}\n")
+        f.write("================================================\n")

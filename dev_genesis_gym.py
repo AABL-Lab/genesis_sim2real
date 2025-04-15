@@ -348,15 +348,15 @@ class GenesisGym(gymnasium.Env):
     def calc_gripper_force(self, cmd_gripper_pos, threshold=0.03):
         # Calculate the gripper force based on the gripper position
         pos = self.last_arm_dofs
-        output_force = [0., 0., 0., 0.]
+        output_force = [0., 0.] #, 0., 0.]
         motor_cmd = (100 - cmd_gripper_pos) / 100
         right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
         left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
         right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > threshold else 0.0
         left_fingertip_error = pos[-1] - KINOVA_START_DOFS_POS[-1]; left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > threshold else 0.0
 
-        output_force[0] = -self.kp*right_error[0]; output_force[2] = self.kp*right_fingertip_error
-        output_force[1] = -self.kp*left_error[0]; output_force[3] = self.kp*left_fingertip_error
+        output_force[0] = -self.kp*right_error[0];# output_force[2] = self.kp*right_fingertip_error
+        output_force[1] = -self.kp*left_error[0]; #output_force[3] = self.kp*left_fingertip_error
         # print(output_force)
         return np.array(output_force)
 
@@ -378,8 +378,8 @@ class GenesisGym(gymnasium.Env):
         # gripper_force[3] = 2.0
         # print(f"Gripper force: {' '.join([f'{x:.2f}' for x in gripper_force])}")
 
-        self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:]))
-        # self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
+        # self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:]))
+        self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
         self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
 
     def compute_reward(self, obs):
