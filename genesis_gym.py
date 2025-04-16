@@ -76,6 +76,8 @@ class GenesisDemoHolder:
             trial_id = str(path).split('_episodes')[0].split('/')[-1]
             self.demos.append((int(trial_id), action))
 
+        self.NEXT_DEMO_CALLED = False # We've already loaded the first demo, so do nothing the first time
+
         ## postprocess
         for idx, (trial_id, d) in enumerate(self.demos):
             if self.subsample_ratio > 1:
@@ -83,6 +85,14 @@ class GenesisDemoHolder:
                 subsampled_d = []
                 for i in range(1, len(d), self.subsample_ratio):
                     subsampled_d.append(np.mean(d[i-self.subsample_ratio:i], axis=0))
+                # fill in the first action
+                subsampled_d[0] = d[0]
+
+                # check for nans
+                if np.isnan(subsampled_d).any():
+                    print(f"!!NaN in demo {trial_id}!!")
+                    continue
+
                 self.demos[idx] = (trial_id, np.array(subsampled_d))
 
         self.idx = 0
@@ -95,6 +105,9 @@ class GenesisDemoHolder:
         self.COMPLETED = False
 
     def next_demo(self):
+        if not self.NEXT_DEMO_CALLED: 
+            self.NEXT_DEMO_CALLED = True
+            return self.demos[self.idx][0]
         self.idx += 1
         self.action_idx = 0
         if self.idx >= len(self.demos):
@@ -110,6 +123,7 @@ class GenesisDemoHolder:
         print(f"Reset current demo {self.demos[self.idx][0]}")
 
     def next_action(self, normalize=False):
+        if not self.NEXT_DEMO_CALLED: self.NEXT_DEMO_CALLED = True # If we take an action, next demo should move us forward
         if self.action_idx >= len(self.demos[self.idx][1]):
             return None
         
@@ -188,6 +202,7 @@ class GenesisGym(gymnasium.Env):
 
         self.last_arm_dofs = None
 
+        # initialize if we haven't already
         gs.init(backend=gs.gpu, seed=random.randint(0, 2**30), precision="32", logging_level="warning")
         self.metadata = {
             "render_fps": 30
@@ -506,9 +521,12 @@ if __name__ == '__main__':
             return GenesisGym.action_space.sample()
         else:
             action = demo_player.next_action(normalize=False)
-            if action is None:
-                return None
-            return action['action']
+            ret = action['action'] if action is not None else None
+
+            if ret is not None and np.isnan(ret).any():
+                print(f"!!NaN action!! {ret=} at index {demo_player.action_idx-1}")
+
+            return ret
 
 
     env = GenesisGym(args)
