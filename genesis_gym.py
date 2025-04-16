@@ -237,11 +237,13 @@ class GenesisGym(gymnasium.Env):
         )
 
         self.cam_1 = scene.add_camera(
-            pos=(1, 0, 1),
-            lookat=(0.6, 0, 0.25),
-            fov=30,
-            GUI=True,
+            pos=(0.04, 0.0, 0.75),
+            lookat=(0.58, -BOX_WIDTH / 4, 0.02),
+            up=(0, 1, 0),
+            fov=45,
+            GUI=False,
         )
+        
 
         # TODO: see if you can prevent the gripper from being convexified
         self.kinova = kinova = scene.add_entity(
@@ -357,7 +359,8 @@ class GenesisGym(gymnasium.Env):
     
     def get_obs(self, is_first=False):
         # Get the current observation from the scene
-        image = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
+        # image = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
+        image = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
         # from IPython import embed; embed(); exit(0)
         image = image[0] # grab the rgb
         # resize the image to the desired size
@@ -472,7 +475,7 @@ class GenesisGym(gymnasium.Env):
                 cv2.imshow('Genesis Gym', img)
                 cv2.imshow('Genesis Gym 1', img2)
                 cv2.waitKey(1)
-        return img
+        return img2
     
 if __name__ == '__main__':
     import argparse
