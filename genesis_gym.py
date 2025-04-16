@@ -99,8 +99,12 @@ class GenesisDemoHolder:
         self.action_idx = 0
         print(f"Loaded {len(self.demos)} demos from {self.dir}")
 
+        total_samples = 0
         for trial_id, d in self.demos:
-            print(trial_id, d.shape)
+            print(trial_id, d.shape, end=' -- ')
+            total_samples += d.shape[0]
+        print()
+        print(f"Total samples: {total_samples}")
 
         self.COMPLETED = False
 
