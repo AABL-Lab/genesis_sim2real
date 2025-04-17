@@ -273,7 +273,7 @@ class GenesisGym(gymnasium.Env):
                 pos=(0.0, 0.0, 0.055), # raise to account for table mount
             ),
             material=gs.materials.Rigid(friction=1.0),
-            vis_mode="collision"
+            vis_mode="visual"
 
             # gs.morphs.MJCF(file="/home/j/workspace/genesis_pickaplace/005_tomato_soup_can/google_512k/kinbody.xml"),
         )
