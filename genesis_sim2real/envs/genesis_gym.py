@@ -192,7 +192,7 @@ class GenesisGym(gymnasium.Env):
             'friction': kwargs.friction if hasattr(kwargs, 'friction') else DEFAULT_FRICTION,
             'vis': kwargs.vis if hasattr(kwargs, 'vis') else False,
             'grayscale': kwargs.grayscale if hasattr(kwargs, 'grayscale') else False,
-            'time_limit': kwargs.time_limit if hasattr(kwargs, 'time_limit') else 1500,
+            'time_limit': kwargs.time_limit if hasattr(kwargs, 'time_limit') else 800,
             # 'starting_x': args.starting_x if hasattr(args, 'starting_x') else 0.65
             }
 
