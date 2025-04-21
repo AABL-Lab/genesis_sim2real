@@ -177,8 +177,10 @@ class GenesisGym(gymnasium.Env):
     # actions are eef position, orientation, and gripper position
     action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32) 
 
-    def __init__(self, args={}, size=(96, 96), use_truncated_in_return=False):
+    def __init__(self, args={}, size=(96, 96), use_truncated_in_return=False, use_eef=True):
         super().__init__()
+        self.use_eef = use_eef
+
         self.args = {
             'rho': args.rho if hasattr(args, 'rho') else DEFAULT_RHO,
             'radius': args.radius if hasattr(args, 'radius') else DEFAULT_RADIUS,
@@ -193,11 +195,16 @@ class GenesisGym(gymnasium.Env):
         print(f"GenesisGym args: {self.args}")
 
         self.size = size
+
+        if use_eef:
+            state_space = spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 1 + 3,), dtype=np.float32) # joint angles and gripper state as well as can location and differential to goal
+        else:
+            state_space = spaces.Box(low=-np.inf, high=np.inf, shape=(10 + 3,), dtype=np.float32) # joint angles and gripper state as well as can location and differential to goal
         # Define action and observation space
         # Observations are either an image, a state, or a combination
         self.observation_space = spaces.Dict({
             "image": spaces.Box(low=0, high=255, shape=(*size, 3 if not self.args['grayscale'] else 1), dtype=np.uint8),
-            "state": spaces.Box(low=-np.inf, high=np.inf, shape=(10 + 3,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
+            "state": state_space, # joint angles and gripper state as well as can location and differential to goal
             'reward': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
             'is_first': spaces.Box(low=0, high=1, shape=(), dtype=bool),
             'is_last': spaces.Box(low=0, high=1, shape=(), dtype=bool),
@@ -394,6 +401,10 @@ class GenesisGym(gymnasium.Env):
         #     image = np.zeros((*self.size, 3), dtype=np.uint8)
 
         arm_pos = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
+        eef_pos = self.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
+        eef_rot = self.kinova.get_link('end_effector_link').get_ang().cpu().numpy()
+
+
         bottle_pos = self.bottle.get_pos().cpu().numpy()
         state = np.concatenate((arm_pos, bottle_pos))
 

@@ -1,0 +1,130 @@
+from genesis_sim2real.envs.genesis_gym import GenesisGym
+from genesis_sim2real.envs.genesis_gym import GenesisDemoHolder
+from genesis_sim2real.envs.genesis_gym import DEFAULT_FRICTION, DEFAULT_HEIGHT, DEFAULT_RADIUS, DEFAULT_RHO, DEFAULT_STARTING_X
+import numpy as np
+import cv2
+import os
+import pathlib as pl
+import matplotlib.pyplot as plt
+import torch
+import gymnasium
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Genesis Gym Environment')
+    parser.add_argument('--vis', action='store_true', help='Enable visualization')
+    parser.add_argument('--radius', type=float, default=DEFAULT_RADIUS, help='Bottle radius')
+    parser.add_argument('-e', '--height', type=float, default=DEFAULT_HEIGHT, help='Bottle height')
+    parser.add_argument('-o', '--rho', type=float, default=DEFAULT_RHO, help='Density of the bottle')
+    parser.add_argument('--friction', type=float, default=DEFAULT_FRICTION, help='Friction of the bottle')
+    parser.add_argument('--starting_x', type=float, default=DEFAULT_STARTING_X, help='Starting x position of the bottle')
+    parser.add_argument('--max-demos', type=int, default=1e7, help='Max number of demos to load')
+    parser.add_argument('--random-agent', action='store_true', help='Use a random agent')
+    parser.add_argument('--subsample', type=int, default=1, help='Subsample ratio for the demos')
+    args = parser.parse_args()
+
+    use_eef = True
+    demo_player = GenesisDemoHolder(max_demos=args.max_demos, use_eef=use_eef, subsample_ratio=args.subsample)
+
+    # print(GenesisGym.action_space, GenesisGym.action_space.low, GenesisGym.action_space.high)
+    # ### Action normalization / unnormalization
+    # while action := demo_player.next_action(normalize=False):
+    #     original_action = action['action']
+    #     normalized_action = _normalize_action(original_action, GenesisGym.action_space)
+    #     unnormalized_action = _unnormalize_action(normalized_action, GenesisGym.action_space)
+    #     print(f"orig, norm, unnorm: {' || '.join([f'{a:+.2f} {x:+.2f} {y:+.2f}' for a,x,y in zip(original_action, normalized_action, unnormalized_action)])}")
+
+    # exit()
+
+    def get_action():
+        if args.random_agent:
+            return GenesisGym.action_space.sample()
+        else:
+            action = demo_player.next_action(normalize=False)
+            ret = action['action'] if action is not None else None
+
+            if ret is not None and np.isnan(ret).any():
+                print(f"!!NaN action!! {ret=} at index {demo_player.action_idx-1}")
+
+            return ret
+
+
+    env = GenesisGym(**args.__dict__)
+    obs = env.reset()
+
+    done = False
+    max_reward = float('-inf'); reward = 0
+    trials = 1; successful_trials = 0; steps = 0; pickups = 0
+
+    from collections import defaultdict
+    demonstrations = defaultdict(lambda: {'image': [], 'state': [], 'action': [], 'reward': [], 'next_state': [], 'next_image': [], 'done': []})
+
+    trial_id = demo_player.get_trial_id()
+    while True:
+        # action = env.action_space.sample()  # Sample random action
+        action = get_action()
+
+        if action is None or steps > env._max_episode_steps() or done:
+            bottleZ = env.bottle.get_pos().cpu().numpy()[2]
+            print(f"\t Max Reward {max_reward:+1.2f}. {bottleZ=}")
+            max_reward = float('-inf')
+
+            # close off the last demo
+            demonstrations[trial_id]['done'][-1] = True
+
+            trial_id = demo_player.next_demo()
+            if reward > 0: successful_trials += 1
+            if bottleZ > 0.15: pickups += 1
+            if trial_id == -1:
+                print("No more demos")
+                break
+            trials += 1; steps = 0; done = False
+
+            # write out a histogram of the dp
+            # plt.hist(env.dp, bins=50, range=(0, 0.2), alpha=0.5)
+            # plt.title(f"Demo {trial_id} DP Histogram")
+            # plt.xlabel('DP')
+            # plt.ylabel('Frequency')
+            # plt.savefig(f'results/{trial_id}_ss{SUBSAMPLE_RATIO}_dp_histogram.png')
+
+            env.reset(trial_id=trial_id)
+        else:
+            steps += 1
+            # print(action)
+            next_obs, reward, done, *_ = env.step(action)
+            if args.vis: env.render(use_imshow=True)
+            if reward > max_reward:
+                max_reward = reward
+
+
+            demonstrations[trial_id]['image'].append(obs['image'])
+            demonstrations[trial_id]['state'].append(obs['state'])
+            demonstrations[trial_id]['action'].append(action)
+            demonstrations[trial_id]['reward'].append(reward)
+            demonstrations[trial_id]['next_state'].append(next_obs['state'])
+            demonstrations[trial_id]['next_image'].append(next_obs['image'])
+            demonstrations[trial_id]['done'].append(done)
+            obs = next_obs
+            
+            # if reward > -0.10:
+            #     print(f"Reward: {reward}")
+
+    print(f"Trials: {trials} Successful Trials: {successful_trials} Success Rate: {successful_trials/trials:.2%}")
+    print(f"Pickups: {pickups} Pickup Rate: {pickups/trials:.2%}")
+
+    # Save the demonstrations to a file
+    for trial_id, demo in demonstrations.items():
+        # save the demo out
+        output_path = pl.Path(f'./inthewild_trials_eef_SB3/{trial_id}_episodes.npy')
+        # make the new directory if it doesn't exist
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(output_path, demo)
+
+    # Append the results to a file. Create it if it doesn't exist.
+    pl.Path('results').mkdir(parents=True, exist_ok=True)
+    with open('results/results.txt', 'a') as f:
+        f.write(f"subsample ratio {args.subsample} -- {'EEF' if use_eef else ''} {successful_trials/trials:.2%}\n")
+        f.write(f"Trials: {trials} Successful Trials: {successful_trials} Success Rate: {successful_trials/trials:.2%}\n")
+        f.write(f"Pickups: {pickups} Pickup Rate: {pickups/trials:.2%}\n")
+        f.write(f"Max Reward: {max_reward}\n")
+        f.write("================================================\n")
