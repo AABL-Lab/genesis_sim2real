@@ -181,7 +181,9 @@ class GenesisGym(gymnasium.Env):
     # action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)
     
     # actions are eef position, orientation, and gripper position
-    action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32) 
+    # action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32) 
+    action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 100.]), shape=(5,), dtype=np.float32) 
+
 
     def __init__(self, size=(96, 96), use_truncated_in_return=False, debug=False, stable_baselines=False, **kwargs):
         super().__init__()
@@ -447,9 +449,27 @@ class GenesisGym(gymnasium.Env):
 
     def apply_action(self, action, use_eef=True):
         if use_eef:
-            eef_pos, eef_euler, gripper_pos = action[:3], action[3:6], action[6:]
-            eef_quat = gs.utils.geom.xyz_to_quat(eef_euler)
-            ik_joints = self.kinova.inverse_kinematics(self.kinova.get_link('end_effector_link'), pos=eef_pos, quat=eef_quat, rot_mask=[True, True, True])
+            # eef_pos, eef_euler, gripper_pos = action[:3], action[3:6], action[6:]
+            # eef_quat = gs.utils.geom.xyz_to_quat(eef_euler)
+            eef_link = self.kinova.get_link('end_effector_link')
+            # curr_eef_pos = eef_link.get_pos().cpu().numpy()
+            curr_eef_quat = eef_link.get_quat().cpu().numpy()
+
+            eef_pos, eef_yaw, gripper_pos = action[:3], action[4], action[-1:]
+            # eef_quat = gs.utils.geom.xyz_to_quat(np.array([curr_eef_ang[2], curr_eef_ang[1], curr_eef_ang[0]]))
+
+            curr_eef_euler = gs.utils.geom.quat_to_xyz(curr_eef_quat)
+            # curr_eef_quat = gs.utils.geom.xyz_to_quat(curr_eef_euler)
+            eef_quat = gs.utils.geom.xyz_to_quat(np.array([curr_eef_euler[0], eef_yaw, curr_eef_euler[2]]))
+
+
+            # print(f'eef_ang {curr_eef_ang}, decoded eef_ang {gs.utils.geom.quat_to_xyz(curr_eef_quat)}')
+            # print(f'eef_quat {curr_eef_quat}, decoded eef_quat {gs.utils.geom.xyz_to_quat(curr_eef_ang)}')
+            # eef_quat = gs.utils.geom.xyz_to_quat(curr_eef_ang)
+
+            ik_joints = self.kinova.inverse_kinematics(eef_link, pos=eef_pos, quat=eef_quat, rot_mask=[False, False, True])
+            # ik_joints = self.kinova.inverse_kinematics(eef_link, pos=curr_eef_pos, quat=curr_eef_quat, rot_mask=[False, False, True])
+
             arm_pos = ik_joints[:-4]
         else: # use joint angles
             arm_pos, gripper_pos = action[:6], action[6:]
@@ -458,7 +478,7 @@ class GenesisGym(gymnasium.Env):
 
 
         # calculate the current positions distance from the desired positions
-        current_position = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
+        # current_position = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
 
 
         dp = 0 #np.linalg.norm(current_position[:6] - arm_pos, ord=2, axis=-1)
