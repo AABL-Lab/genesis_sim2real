@@ -6,8 +6,22 @@ from stable_baselines3 import SAC
 import numpy as np
 import pathlib as pl
 
-env = gym.make("genesis_lift_SB-v0", render_mode="human")
-model = SAC("MultiInputPolicy" , env, verbose=1, buffer_size=350000)
+config = {
+    "policy_type": "MultiInputPolicy",
+    "total_timesteps": 200000,
+    "env_name": "genesis_lift_SB-v0",
+}
+
+import wandb
+run = wandb.init(
+    project="sb3",
+    config=config,
+    sync_tensorboard=True,  # auto-upload sb3's tensorboard metrics
+    monitor_gym=True,  # auto-upload the videos of agents playing the game
+    save_code=True,  # optional
+)
+env = gym.make(config['env_name'], render_mode="human")
+model = SAC(config['policy_type'] , env, verbose=1, buffer_size=350000, tensorboard_log=f"runs/{run.id}")
 
 demo_path = pl.Path("./inthewild_trials_eef_SB3/")
 print(f"Demo path: {demo_path}, exists: {demo_path.exists()}, is_dir: {demo_path.is_dir()}")
@@ -46,8 +60,10 @@ for file in demo_path.iterdir():
         state_dict = {'image': image.reshape(3, 96, 96), 'state': state}
         next_state_dict = {'image': next_image.reshape(3, 96, 96), 'state': next_state}
 
+        a = [actions[0], actions[1], actions[2], actions[4], actions[6]]
+
         try:
-            model.replay_buffer.add(state_dict, next_state_dict, action, np.array([reward], dtype=np.float32), np.array([done]), infos=[{}])
+            model.replay_buffer.add(state_dict, next_state_dict, np.array(a), np.array([reward], dtype=np.float32), np.array([done]), infos=[{}])
         except Exception as e:
             # import the stack trace
             import traceback
@@ -64,10 +80,13 @@ for file in demo_path.iterdir():
             from IPython import embed as ipshell; ipshell()
 
 
-model.learn(total_timesteps=100000, log_interval=4)
+from wandb.integration.sb3 import WandbCallback
+
+model.learn(total_timesteps=config['total_timesteps'], log_interval=500, callback=WandbCallback())
 model.save("genesis_lift")
 
 del model # remove to demonstrate saving and loading
+
 
 model = SAC.load("genesis_lift")
 

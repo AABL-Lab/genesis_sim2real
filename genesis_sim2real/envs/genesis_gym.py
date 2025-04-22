@@ -455,7 +455,7 @@ class GenesisGym(gymnasium.Env):
             # curr_eef_pos = eef_link.get_pos().cpu().numpy()
             curr_eef_quat = eef_link.get_quat().cpu().numpy()
 
-            eef_pos, eef_yaw, gripper_pos = action[:3], action[4], action[-1:]
+            eef_pos, eef_yaw, gripper_pos = action[:3], action[3], action[-1:]
             # eef_quat = gs.utils.geom.xyz_to_quat(np.array([curr_eef_ang[2], curr_eef_ang[1], curr_eef_ang[0]]))
 
             curr_eef_euler = gs.utils.geom.quat_to_xyz(curr_eef_quat)
