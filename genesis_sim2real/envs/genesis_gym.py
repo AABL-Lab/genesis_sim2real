@@ -47,27 +47,27 @@ class GenesisGym(gymnasium.Env):
     
     # make a class wide action space
     # Actions are 7 continuous actions. 6 dof joint angles, 1 gripper position
-    # action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)
+    action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)
     
     # actions are eef position, orientation, and gripper position
-    action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32) 
+    # action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32) 
     # action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 100.]), shape=(5,), dtype=np.float32) 
 
 
     def __init__(self, size=(96, 96), use_truncated_in_return=False, debug=False, stable_baselines=False, **kwargs):
         super().__init__()
         self.args = {
-            'rho': kwargs.rho if hasattr(kwargs, 'rho') else DEFAULT_RHO,
-            'radius': kwargs.radius if hasattr(kwargs, 'radius') else DEFAULT_RADIUS,
-            'height': kwargs.height if hasattr(kwargs, 'height') else DEFAULT_HEIGHT,
-            'friction': kwargs.friction if hasattr(kwargs, 'friction') else DEFAULT_FRICTION,
-            'vis': kwargs.vis if hasattr(kwargs, 'vis') else False,
-            'grayscale': kwargs.grayscale if hasattr(kwargs, 'grayscale') else False,
-            'time_limit': kwargs.time_limit if hasattr(kwargs, 'time_limit') else 800,
-            'env_name': kwargs.env_name if hasattr(kwargs, 'env_name') else 'point',
-            # 'starting_x': args.starting_x if hasattr(args, 'starting_x') else 0.65
+            'rho': kwargs['rho'] if 'rho' in kwargs else DEFAULT_RHO,
+            'radius': kwargs['radius'] if 'radius' in kwargs else DEFAULT_RADIUS,
+            'height': kwargs['height'] if 'height' in kwargs else DEFAULT_HEIGHT,
+            'friction': kwargs['friction'] if 'friction' in kwargs else DEFAULT_FRICTION,
+            'vis': kwargs['vis'] if 'vis' in kwargs else False,
+            'grayscale': kwargs['grayscale'] if 'grayscale' in kwargs else False,
+            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 800,
+            'env_name': kwargs['env_name'] if 'env_name' in kwargs else 'lift',
+            # 'starting_x': args.starting_x if 'starting_x' in args else 0.65
             }
-
+        
         print(f"**kwargs: {kwargs}")
         print(f"GenesisGym Task={self.args['env_name']} args: {self.args}")
 
@@ -332,7 +332,7 @@ class GenesisGym(gymnasium.Env):
         # print(output_force)
         return np.array(output_force)
 
-    def apply_action(self, action, use_eef=True):
+    def apply_action(self, action, use_eef=False):
         if use_eef:
             # eef_pos, eef_euler, gripper_pos = action[:3], action[3:6], action[6:]
             # eef_quat = gs.utils.geom.xyz_to_quat(eef_euler)

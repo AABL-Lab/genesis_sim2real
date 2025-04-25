@@ -53,15 +53,15 @@ if __name__ == '__main__':
             return ret
     trial_id = demo_player.get_trial_id()
 
-    diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
+    # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
     while True:
         # action = env.action_space.sample()  # Sample random action
-        # action = get_action()
-        action = diff_eef_demo[action_idx]
-        action_idx += 1
+        action = get_action()
+        # action = diff_eef_demo[action_idx]
+        # action_idx += 1
 
-        # if action is None or steps > env._max_episode_steps() or done:
-        if action_idx >= len(diff_eef_demo) or done or steps > env._max_episode_steps():
+        if action is None or steps > env._max_episode_steps() or done:
+        # if action_idx >= len(diff_eef_demo) or done or steps > env._max_episode_steps():
             bottleZ = env.bottle.get_pos().cpu().numpy()[2]
             print(f"\t Max Reward {max_reward:+1.2f}. {bottleZ=}")
             max_reward = float('-inf')
@@ -77,7 +77,7 @@ if __name__ == '__main__':
             if trial_id == -1:
                 print("No more demos")
                 break
-            diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
+            # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
             trials += 1; steps = 0; done = False
 
             # write out a histogram of the dp

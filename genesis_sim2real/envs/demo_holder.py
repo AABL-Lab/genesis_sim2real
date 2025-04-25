@@ -2,7 +2,7 @@ import pathlib as pl
 import numpy as np
 import torch
 import genesis as gs
-from genesis_sim2real.envs.dev_genesis_gym import _normalize_action
+from genesis_sim2real.envs.genesis_gym import _normalize_action
 
 class GenesisDemoHolder:
     """
@@ -171,9 +171,14 @@ class GenesisDemoHolder:
             np.save(output_path, new_d)
 
 if __name__ == '__main__':
-    demo_holder = GenesisDemoHolder(max_demos=10, use_eef=True)
-    diff_eef_demo = demo_holder.convert_eef_to_diff_eef()
-    print(diff_eef_demo[-1])
+    from genesis_sim2real.envs.genesis_gym import _normalize_action, _unnormalize_action
+    demo_holder = GenesisDemoHolder(max_demos=10, use_eef=False)
+
+    for idx, (trial_id, d) in enumerate(demo_holder.demos):
+        for i in range(d.shape[0]):
+            print(f"{trial_id} {i}: {d[i]}")
+    # diff_eef_demo = demo_holder.convert_eef_to_diff_eef()
+    # print(diff_eef_demo[-1])
 
 
             
