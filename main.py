@@ -1,5 +1,5 @@
-from genesis_sim2real.envs.genesis_gym import GenesisGym
-from genesis_sim2real.envs.genesis_gym import GenesisDemoHolder
+from genesis_sim2real.envs.dev_genesis_gym import GenesisGym
+from genesis_sim2real.envs.demo_holder import GenesisDemoHolder
 from genesis_sim2real.envs.genesis_gym import DEFAULT_FRICTION, DEFAULT_HEIGHT, DEFAULT_RADIUS, DEFAULT_RHO, DEFAULT_STARTING_X
 import numpy as np
 import cv2
@@ -20,22 +20,26 @@ if __name__ == '__main__':
     parser.add_argument('--starting_x', type=float, default=DEFAULT_STARTING_X, help='Starting x position of the bottle')
     parser.add_argument('--max-demos', type=int, default=1e7, help='Max number of demos to load')
     parser.add_argument('--random-agent', action='store_true', help='Use a random agent')
-    parser.add_argument('--subsample', type=int, default=1, help='Subsample ratio for the demos')
+    parser.add_argument('--subsample', type=int, default=2, help='Subsample ratio for the demos')
+    parser.add_argument('--env-name', type=str, default='lift', help='Environment name')
     args = parser.parse_args()
 
     use_eef = True
+
+
+
+    env = GenesisGym(**args.__dict__)
+    obs = env.reset()
+
+    done = False
+    max_reward = float('-inf'); reward = 0
+    trials = 1; successful_trials = 0; steps = 0; pickups = 0
+
+
+    from collections import defaultdict
+    demonstrations = defaultdict(lambda: {'image': [], 'state': [], 'action': [], 'reward': [], 'next_state': [], 'next_image': [], 'done': []})
+
     demo_player = GenesisDemoHolder(max_demos=args.max_demos, use_eef=use_eef, subsample_ratio=args.subsample)
-
-    # print(GenesisGym.action_space, GenesisGym.action_space.low, GenesisGym.action_space.high)
-    # ### Action normalization / unnormalization
-    # while action := demo_player.next_action(normalize=False):
-    #     original_action = action['action']
-    #     normalized_action = _normalize_action(original_action, GenesisGym.action_space)
-    #     unnormalized_action = _unnormalize_action(normalized_action, GenesisGym.action_space)
-    #     print(f"orig, norm, unnorm: {' || '.join([f'{a:+.2f} {x:+.2f} {y:+.2f}' for a,x,y in zip(original_action, normalized_action, unnormalized_action)])}")
-
-    # exit()
-
     def get_action():
         if args.random_agent:
             return GenesisGym.action_space.sample()
@@ -47,24 +51,17 @@ if __name__ == '__main__':
                 print(f"!!NaN action!! {ret=} at index {demo_player.action_idx-1}")
 
             return ret
-
-
-    env = GenesisGym(**args.__dict__)
-    obs = env.reset()
-
-    done = False
-    max_reward = float('-inf'); reward = 0
-    trials = 1; successful_trials = 0; steps = 0; pickups = 0
-
-    from collections import defaultdict
-    demonstrations = defaultdict(lambda: {'image': [], 'state': [], 'action': [], 'reward': [], 'next_state': [], 'next_image': [], 'done': []})
-
     trial_id = demo_player.get_trial_id()
+
+    diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
     while True:
         # action = env.action_space.sample()  # Sample random action
-        action = get_action()
+        # action = get_action()
+        action = diff_eef_demo[action_idx]
+        action_idx += 1
 
-        if action is None or steps > env._max_episode_steps() or done:
+        # if action is None or steps > env._max_episode_steps() or done:
+        if action_idx >= len(diff_eef_demo) or done or steps > env._max_episode_steps():
             bottleZ = env.bottle.get_pos().cpu().numpy()[2]
             print(f"\t Max Reward {max_reward:+1.2f}. {bottleZ=}")
             max_reward = float('-inf')
@@ -73,11 +70,14 @@ if __name__ == '__main__':
             demonstrations[trial_id]['done'][-1] = True
 
             trial_id = demo_player.next_demo()
+
+            # reset the env
             if reward > 0: successful_trials += 1
             if bottleZ > 0.15: pickups += 1
             if trial_id == -1:
                 print("No more demos")
                 break
+            diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
             trials += 1; steps = 0; done = False
 
             # write out a histogram of the dp

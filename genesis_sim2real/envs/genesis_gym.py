@@ -7,7 +7,7 @@ import genesis as gs
 import pathlib as pl
 import cv2
 import torch
-from .kinova import JOINT_NAMES as kinova_joint_names, EEF_NAME as kinova_eef_name, TRIALS_POSITION_0, TRIALS_POSITION_1, TRIALS_POSITION_2
+from genesis_sim2real.envs.kinova import JOINT_NAMES as kinova_joint_names, EEF_NAME as kinova_eef_name, TRIALS_POSITION_0, TRIALS_POSITION_1, TRIALS_POSITION_2
 from matplotlib import pyplot as plt
 
 FINGERTIP_POS = -0.9
@@ -40,137 +40,6 @@ def _unnormalize_action(action, action_space):
     action = (action + 1) / 2 * (action_space.high - action_space.low) + action_space.low
     return action
 
-class GenesisDemoHolder:
-    """
-    Class to hold the demo data for the Genesis environment.
-    """
-    def __init__(self, max_demos=float('inf'), use_eef=False, subsample_ratio=1):
-
-        self.dir = pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials/')
-        self.paths = self.dir.glob('*episodes.npy')
-        self.subsample_ratio = subsample_ratio
-
-        self.demos = []
-        for idx, path in enumerate(self.paths):
-            if idx >= max_demos:
-                break
-
-            # old 
-            if not use_eef:
-                demo = np.load(path, allow_pickle=True).item()
-                arm_pos = np.array(demo['vel_cmd'])
-                gripper_pos = np.array([entry[0] for entry in demo['gripper_pos']])
-                assert len(arm_pos) == len(gripper_pos), f"Arm pos and gripper pos lengths do not match: {len(arm_pos)} vs {len(gripper_pos)}"
-
-                # add a dimension to the gripper_pos
-                gripper_pos = np.expand_dims(gripper_pos, axis=1)
-
-                action = np.concatenate((arm_pos, gripper_pos), axis=1)
-            else: # use eef
-                # new
-                demo = np.load(path, allow_pickle=True)
-                # arm_pos = demo[:, :6]
-                # gripper_pos = demo[:, 6]
-                action = demo
-
-            trial_id = str(path).split('_episodes')[0].split('/')[-1]
-            self.demos.append((int(trial_id), action))
-
-        self.NEXT_DEMO_CALLED = False # We've already loaded the first demo, so do nothing the first time
-
-        ## postprocess
-        for idx, (trial_id, d) in enumerate(self.demos):
-            if self.subsample_ratio > 1:
-                # subsamples the n, d sequence to 1/10th of the original. Averages the action over the 10 samples.
-                subsampled_d = []
-                for i in range(1, len(d), self.subsample_ratio):
-                    subsampled_d.append(np.mean(d[i-self.subsample_ratio:i], axis=0))
-                # fill in the first action
-                subsampled_d[0] = d[0]
-
-                # check for nans
-                if np.isnan(subsampled_d).any():
-                    print(f"!!NaN in demo {trial_id}!!")
-                    continue
-
-                self.demos[idx] = (trial_id, np.array(subsampled_d))
-
-        self.idx = 0
-        self.action_idx = 0
-        print(f"Loaded {len(self.demos)} demos from {self.dir}")
-
-        total_samples = 0
-        for trial_id, d in self.demos:
-            print(trial_id, d.shape, end=' -- ')
-            total_samples += d.shape[0]
-        print()
-        print(f"Total samples: {total_samples}")
-
-        self.COMPLETED = False
-
-    def get_trial_id(self):
-        """
-        Get the trial ID of the current demo.
-        """
-        return self.demos[self.idx][0]
-
-    def next_demo(self):
-        if not self.NEXT_DEMO_CALLED: 
-            self.NEXT_DEMO_CALLED = True
-            return self.demos[self.idx][0]
-        self.idx += 1
-        self.action_idx = 0
-        if self.idx >= len(self.demos):
-            print(f"!!No more demos!!")
-            self.COMPLETED = True
-            return -1
-        trial_id = self.demos[self.idx][0]
-        print(f"Demo {trial_id} loaded")
-        return trial_id
-    
-    def reset_current_demo(self):
-        self.action_idx = 0
-        print(f"Reset current demo {self.demos[self.idx][0]}")
-
-    def next_action(self, normalize=False):
-        if not self.NEXT_DEMO_CALLED: self.NEXT_DEMO_CALLED = True # If we take an action, next demo should move us forward
-        if self.action_idx >= len(self.demos[self.idx][1]):
-            return None
-        
-        action = self.demos[self.idx][1][self.action_idx]
-
-        if normalize: # map from action space to [-1, 1]
-            # print(f'original action: {" ".join([f"{x:+.2f}" for x in action])}')
-            action = _normalize_action(action)
-            # print(f"\tnorm action: {' '.join([f'{x:+.2f}' for x in action])}")
-
-        self.action_idx += 1
-
-        return {'action': action}
-    
-    def convert_joint_to_eef(self, genesis_arm, output_dir='./inthewild_trials_eef'):
-        assert '_eef' not in output_dir, f"Output directory {output_dir} already contains _eef"
-        output_dir = pl.Path(output_dir)
-        for idx, (trial_id, d) in enumerate(self.demos):
-            # if trial_id != 235: continue
-            new_d = []
-            for i in range(d.shape[0]): # for each joint position action [j0, j1, j2, j3, j4, j5, gripper]
-                joint_pos_theta = d[i, :6]
-                joint_pos, joint_quat = genesis_arm.forward_kinematics(torch.tensor(joint_pos_theta))
-                eef_pos = joint_pos[6].cpu().numpy(); eef_quat = joint_quat[6].cpu().numpy()
-                eef_euler = gs.utils.geom.quat_to_xyz(eef_quat)
-                
-                action = np.concatenate((eef_pos, eef_euler, d[i, 6:]), axis=-1)
-                # print(', '.join([f'{x:+.1f}' for x in action]), '||', ', '.join([f'{x:+.1f}' for x in d[i, :]]))
-                new_d.append(action)
-
-            # save the demo out
-            output_path = output_dir / f'{trial_id}_episodes.npy'
-            # make the new directory if it doesn't exist
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            np.save(output_path, new_d)
-            
-
 class GenesisGym(gymnasium.Env):
     """
     Custom Gymnasium environment for the Genesis game.
@@ -181,8 +50,8 @@ class GenesisGym(gymnasium.Env):
     # action_space = spaces.Box(low=np.array([-3.14, -3.14, -3.14, -3.14, -3.14, -3.14, 0]), high=np.array([3.14, 3.14, 3.14, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)
     
     # actions are eef position, orientation, and gripper position
-    # action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32) 
-    action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 100.]), shape=(5,), dtype=np.float32) 
+    action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32) 
+    # action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 100.]), shape=(5,), dtype=np.float32) 
 
 
     def __init__(self, size=(96, 96), use_truncated_in_return=False, debug=False, stable_baselines=False, **kwargs):
@@ -195,10 +64,12 @@ class GenesisGym(gymnasium.Env):
             'vis': kwargs.vis if hasattr(kwargs, 'vis') else False,
             'grayscale': kwargs.grayscale if hasattr(kwargs, 'grayscale') else False,
             'time_limit': kwargs.time_limit if hasattr(kwargs, 'time_limit') else 800,
+            'env_name': kwargs.env_name if hasattr(kwargs, 'env_name') else 'point',
             # 'starting_x': args.starting_x if hasattr(args, 'starting_x') else 0.65
             }
 
-        print(f"GenesisGym args: {self.args}")
+        print(f"**kwargs: {kwargs}")
+        print(f"GenesisGym Task={self.args['env_name']} args: {self.args}")
 
         self.size = size
         # Define action and observation space
@@ -206,7 +77,7 @@ class GenesisGym(gymnasium.Env):
         if not stable_baselines:
             self.observation_space = spaces.Dict({
                 "image": spaces.Box(low=0, high=255, shape=(*size, 3 if not self.args['grayscale'] else 1), dtype=np.uint8),
-                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
+                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
                 'reward': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'is_first': spaces.Box(low=0, high=1, shape=(), dtype=bool),
                 'is_last': spaces.Box(low=0, high=1, shape=(), dtype=bool),
@@ -215,7 +86,7 @@ class GenesisGym(gymnasium.Env):
         else:
             self.observation_space = spaces.Dict({
                 "image": spaces.Box(low=0, high=255, shape=(*size, 3 if not self.args['grayscale'] else 1), dtype=np.uint8),
-                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
+                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
             })
 
         self.last_arm_dofs = None
@@ -234,6 +105,7 @@ class GenesisGym(gymnasium.Env):
             self.init_env()
 
         self.dp = []
+        self.total_steps = 0; self.n_steps = 0
 
 
     def _max_episode_steps(self):
@@ -327,8 +199,6 @@ class GenesisGym(gymnasium.Env):
 
 
         self.kdofs_idx = kdofs_idx = [kinova.get_joint(name).dof_idx_local for name in kinova_joint_names]
-        eef = kinova.get_link(kinova_eef_name)
-        print(f"Kinova end effector: {eef}")
         scene.build()
 
         ############ Optional: set control gains ############
@@ -340,14 +210,19 @@ class GenesisGym(gymnasium.Env):
         kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), kdofs_idx)
 
         # Wrist position
-        wrist = kinova.get_link('end_effector_link')
-        self.wrist_pos_offset = torch.Tensor([0.0, 0.0, 0.07]).to(device=wrist.get_pos().device)
+        self.eef_link = self.kinova.get_link(kinova_eef_name)
+        self.wrist_pos_offset = torch.Tensor([0.0, 0.0, 0.07]).to(device=self.eef_link.get_pos().device)
         self.update_camera_position()
 
     def step(self, action):
         if self.debug:
             return self.observation_space.sample(), 0, False, False, {}
         # self.scene.clear_debug_objects()
+
+
+        if self.total_steps % 1000 == 0:
+            print(', '.join(f"{a:+0.1f}" for a in action))
+
 
         # Apply the action to the scene
         self.apply_action(action)
@@ -360,7 +235,7 @@ class GenesisGym(gymnasium.Env):
         if self.stable_baselines: 
             obs.pop('reward'); obs.pop('is_last')
 
-        self.n_steps += 1
+        self.n_steps += 1; self.total_steps += 1
 
         if self.use_truncated_in_return:
             return obs, reward, done, self.n_steps >= self._max_episode_steps(), {'is_success': done}
@@ -396,7 +271,7 @@ class GenesisGym(gymnasium.Env):
             ret = obs
         return ret
     
-    def get_obs(self, is_first=False):
+    def get_obs(self, is_first=False, picture_in_picture=True):
         # Get the current observation from the scene
         # image = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
         image = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
@@ -404,6 +279,12 @@ class GenesisGym(gymnasium.Env):
         image = image[0] # grab the rgb
         # resize the image to the desired size
         image = cv2.resize(image, self.size)
+
+        if picture_in_picture:
+            # grab the image from cam_0, shrink it, and put it in the corner of the main image
+            image2 = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
+            image2 = cv2.resize(image2, (int(self.size[0] / 4), int(self.size[1] / 4)))
+            image[:int(self.size[0] / 4), :int(self.size[1] / 4)] = image2
 
         if self.args['grayscale']:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -415,12 +296,16 @@ class GenesisGym(gymnasium.Env):
 
         arm_pos = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
 
-        eef_pos = self.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
-        eef_ang = self.kinova.get_link('end_effector_link').get_ang().cpu().numpy()
+        eef_pos = self.eef_link.get_pos().cpu().numpy()
+        eef_euler = gs.utils.geom.quat_to_xyz(self.eef_link.get_quat()).cpu().numpy()
+        eef_lin_vel = self.eef_link.get_vel().cpu().numpy() # linear velocity
+        eef_ang_vel = self.eef_link.get_ang().cpu().numpy() # angular velocity
         bottle_pos = self.bottle.get_pos().cpu().numpy()
         # state = np.concatenate((arm_pos, bottle_pos))
 
-        state = np.concatenate((eef_pos, eef_ang, bottle_pos))
+        finger_joint_pos = [arm_pos[-4]]
+
+        state = np.concatenate((eef_pos, eef_euler, eef_lin_vel, eef_ang_vel, bottle_pos, finger_joint_pos))
 
         self.last_arm_dofs = arm_pos
 
@@ -451,7 +336,7 @@ class GenesisGym(gymnasium.Env):
         if use_eef:
             # eef_pos, eef_euler, gripper_pos = action[:3], action[3:6], action[6:]
             # eef_quat = gs.utils.geom.xyz_to_quat(eef_euler)
-            eef_link = self.kinova.get_link('end_effector_link')
+            eef_link = self.eef_link
             # curr_eef_pos = eef_link.get_pos().cpu().numpy()
             curr_eef_quat = eef_link.get_quat().cpu().numpy()
 
@@ -502,20 +387,33 @@ class GenesisGym(gymnasium.Env):
 
         # Pick up the cup, and penalize for contact with the ground plane.
         plane_contacts = self.kinova.get_contacts(self.plane)
-        if plane_contacts['position'].shape[0] > 0:
-            # print(f"CONTACT with plane.")
-            reward -= 0.01
-        elif bottle_pos[2].cpu().numpy().item() >= 0.14:
-            print(f"SUCCESS!")
-            reward = 1.
-            done = True
+        if self.args['env_name'] == 'point':
+            eef_joint_pos = self.eef_link.get_pos().cpu().numpy()
+            goal_pos = self.goal_bottle.get_pos().cpu().numpy()
+            distance = np.linalg.norm(eef_joint_pos - goal_pos, ord=2)
+            reward -= distance
+            if distance < 0.1:
+                print(f"SUCCESS!")
+                reward = 1.
+                done = True
+            # else:
+                # print the points and distance
+                # print(f"Distance: {distance:.2f}, EEF pos: {eef_joint_pos}, Goal pos: {goal_pos}")
+        else:
+            if plane_contacts['position'].shape[0] > 0:
+                # print(f"CONTACT with plane.")
+                reward -= 0.001
+            elif bottle_pos[2].cpu().numpy().item() >= 0.14: # lift task
+                print(f"SUCCESS!")
+                reward = 1.
+                done = True
         ## pick up cup
 
         return reward, done
 
     def update_camera_position(self):
         # Update the camera position based on the end effector position
-        wrist = self.kinova.get_link('end_effector_link')
+        wrist = self.eef_link
         position = wrist.get_pos() + self.wrist_pos_offset
         rotation = wrist.get_ang()
 
@@ -545,6 +443,7 @@ class GenesisGym(gymnasium.Env):
         return img2
     
 if __name__ == '__main__':
+    from genesis_sim2real.envs.demo_holder import GenesisDemoHolder
     import argparse
     parser = argparse.ArgumentParser(description='Genesis Gym Environment')
     parser.add_argument('--vis', action='store_true', help='Enable visualization')
@@ -559,18 +458,21 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     use_eef = True
+
+
+
+    env = GenesisGym(**args.__dict__)
+    obs = env.reset()
+
+    done = False
+    max_reward = float('-inf'); reward = 0
+    trials = 1; successful_trials = 0; steps = 0; pickups = 0
+
+
+    from collections import defaultdict
+    demonstrations = defaultdict(lambda: {'image': [], 'state': [], 'action': [], 'reward': [], 'next_state': [], 'next_image': [], 'done': []})
+
     demo_player = GenesisDemoHolder(max_demos=args.max_demos, use_eef=use_eef, subsample_ratio=args.subsample)
-
-    # print(GenesisGym.action_space, GenesisGym.action_space.low, GenesisGym.action_space.high)
-    # ### Action normalization / unnormalization
-    # while action := demo_player.next_action(normalize=False):
-    #     original_action = action['action']
-    #     normalized_action = _normalize_action(original_action, GenesisGym.action_space)
-    #     unnormalized_action = _unnormalize_action(normalized_action, GenesisGym.action_space)
-    #     print(f"orig, norm, unnorm: {' || '.join([f'{a:+.2f} {x:+.2f} {y:+.2f}' for a,x,y in zip(original_action, normalized_action, unnormalized_action)])}")
-
-    # exit()
-
     def get_action():
         if args.random_agent:
             return GenesisGym.action_space.sample()
@@ -582,19 +484,8 @@ if __name__ == '__main__':
                 print(f"!!NaN action!! {ret=} at index {demo_player.action_idx-1}")
 
             return ret
-
-
-    env = GenesisGym(**args.__dict__)
-    obs = env.reset()
-
-    done = False
-    max_reward = float('-inf'); reward = 0
-    trials = 1; successful_trials = 0; steps = 0; pickups = 0
-
-    from collections import defaultdict
-    demonstrations = defaultdict({'image': [], 'state': [], 'action': [], 'reward': [], 'next_state': [], 'next_image': []})
-
     trial_id = demo_player.get_trial_id()
+
     while True:
         # action = env.action_space.sample()  # Sample random action
         action = get_action()
@@ -608,6 +499,8 @@ if __name__ == '__main__':
             demonstrations[trial_id]['done'][-1] = True
 
             trial_id = demo_player.next_demo()
+
+            # reset the env
             if reward > 0: successful_trials += 1
             if bottleZ > 0.15: pickups += 1
             if trial_id == -1:
@@ -627,7 +520,10 @@ if __name__ == '__main__':
             steps += 1
             # print(action)
             next_obs, reward, done, *_ = env.step(action)
-            if args.vis: env.render(use_imshow=True)
+            if args.vis: 
+                img = next_obs['image']
+                cv2.imshow('image', img)
+                cv2.waitKey(1)
             if reward > max_reward:
                 max_reward = reward
 
@@ -650,12 +546,13 @@ if __name__ == '__main__':
     # Save the demonstrations to a file
     for trial_id, demo in demonstrations.items():
         # save the demo out
-        output_path = pl.Path(f'./inthewild_trials_eef/{trial_id}_episodes.npy')
+        output_path = pl.Path(f'./inthewild_trials_eef_SB3/{trial_id}_episodes.npy')
         # make the new directory if it doesn't exist
         output_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(output_path, demo)
 
     # Append the results to a file. Create it if it doesn't exist.
+    pl.Path('results').mkdir(parents=True, exist_ok=True)
     with open('results/results.txt', 'a') as f:
         f.write(f"subsample ratio {args.subsample} -- {'EEF' if use_eef else ''} {successful_trials/trials:.2%}\n")
         f.write(f"Trials: {trials} Successful Trials: {successful_trials} Success Rate: {successful_trials/trials:.2%}\n")
