@@ -68,7 +68,7 @@ class GenesisGym(gymnasium.Env):
             # 'starting_x': args.starting_x if 'starting_x' in args else 0.65
             }
         
-        print(f"**kwargs: {kwargs}")
+        # print(f"**kwargs: {kwargs}")
         print(f"GenesisGym Task={self.args['env_name']} args: {self.args}")
 
         self.size = size
@@ -219,9 +219,10 @@ class GenesisGym(gymnasium.Env):
             return self.observation_space.sample(), 0, False, False, {}
         # self.scene.clear_debug_objects()
 
-
+        if self.use_truncated_in_return:
+            action = _unnormalize_action(action, self.action_space)
         if self.total_steps % 1000 == 0:
-            print(', '.join(f"{a:+0.1f}" for a in action))
+            print(f'gym sees action {action}', ', '.join(f"{a:+0.1f}" for a in action))
 
 
         # Apply the action to the scene
@@ -271,6 +272,12 @@ class GenesisGym(gymnasium.Env):
             ret = obs
         return ret
     
+    def picture_in_picture(self, image0, image1):
+        # Resize the image to the desired size
+        image0 = cv2.resize(image0, (int(self.size[0] / 4), int(self.size[1] / 4)))
+        image1[:int(self.size[0] / 4), :int(self.size[1] / 4)] = image0
+        return image1
+
     def get_obs(self, is_first=False, picture_in_picture=True):
         # Get the current observation from the scene
         # image = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
@@ -283,8 +290,9 @@ class GenesisGym(gymnasium.Env):
         if picture_in_picture:
             # grab the image from cam_0, shrink it, and put it in the corner of the main image
             image2 = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
-            image2 = cv2.resize(image2, (int(self.size[0] / 4), int(self.size[1] / 4)))
-            image[:int(self.size[0] / 4), :int(self.size[1] / 4)] = image2
+            # image2 = cv2.resize(image2, (int(self.size[0] / 4), int(self.size[1] / 4)))
+            # image[:int(self.size[0] / 4), :int(self.size[1] / 4)] = image2
+            image = self.picture_in_picture(image2, image)
 
         if self.args['grayscale']:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -322,6 +330,9 @@ class GenesisGym(gymnasium.Env):
         pos = self.last_arm_dofs
         output_force = [0., 0.] #, 0., 0.]
         motor_cmd = (100 - cmd_gripper_pos) / 100
+        
+        if motor_cmd > 0.6: motor_cmd = max([0.9], motor_cmd) # make the gripper close more
+
         right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
         left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
         right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > threshold else 0.0
@@ -428,6 +439,15 @@ class GenesisGym(gymnasium.Env):
 
         self.cam_0.set_pose(pos=position.cpu().numpy(), lookat=middle.cpu().numpy(), up=(0, 0, 1))
 
+    def get_grip_pose(self):
+        # get the average position of the fingertips
+        left_fingertip = self.kinova.get_link('left_finger_bottom_joint').get_pos().cpu().numpy()
+        right_fingertip = self.kinova.get_link('right_finger_bottom_joint').get_pos().cpu().numpy()
+        return np.mean([left_fingertip, right_fingertip], axis=0)
+    
+    def set_can_to_pose(self, pos):
+        self.bottle.set_pos(pos)
+
     def render(self, mode='human', use_imshow=False):
         # Render the scene
         img = None
@@ -436,6 +456,9 @@ class GenesisGym(gymnasium.Env):
             img = cv2.resize(img, self.size)
 
             img2 = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
+
+            img2 = self.picture_in_picture(img, img2)
+
             if use_imshow:
                 cv2.imshow('Genesis Gym', img)
                 cv2.imshow('Genesis Gym 1', img2)

@@ -4,13 +4,118 @@ import torch
 import genesis as gs
 from genesis_sim2real.envs.genesis_gym import _normalize_action
 
+# --- Define Expanded Discrete Action Indices (29 Actions) ---
+
+# Gripper (Indices 0-1)
+ACTION_OPEN_GRIPPER = 0
+ACTION_CLOSE_GRIPPER = 1
+
+# Single Axis Movement (Indices 2-7)
+ACTION_MOVE_PX = 2  # +X
+ACTION_MOVE_NX = 3  # -X
+ACTION_MOVE_PY = 4  # +Y
+ACTION_MOVE_NY = 5  # -Y
+ACTION_MOVE_PZ = 6  # +Z
+ACTION_MOVE_NZ = 7  # -Z
+
+# Two Axis Movement (Indices 8-19)
+# XY Plane
+ACTION_MOVE_PX_PY = 8   # +X+Y
+ACTION_MOVE_PX_NY = 9   # +X-Y
+ACTION_MOVE_NX_PY = 10  # -X+Y
+ACTION_MOVE_NX_NY = 11  # -X-Y
+# XZ Plane
+ACTION_MOVE_PX_PZ = 12  # +X+Z
+ACTION_MOVE_PX_NZ = 13  # +X-Z
+ACTION_MOVE_NX_PZ = 14  # -X+Z
+ACTION_MOVE_NX_NZ = 15  # -X-Z
+# YZ Plane
+ACTION_MOVE_PY_PZ = 16  # +Y+Z
+ACTION_MOVE_PY_NZ = 17  # +Y-Z
+ACTION_MOVE_NY_PZ = 18  # -Y+Z
+ACTION_MOVE_NY_NZ = 19  # -Y-Z
+
+# Three Axis Movement (Indices 20-27)
+ACTION_MOVE_PX_PY_PZ = 20 # +X+Y+Z
+ACTION_MOVE_PX_PY_NZ = 21 # +X+Y-Z
+ACTION_MOVE_PX_NY_PZ = 22 # +X-Y+Z
+ACTION_MOVE_PX_NY_NZ = 23 # +X-Y-Z
+ACTION_MOVE_NX_PY_PZ = 24 # -X+Y+Z
+ACTION_MOVE_NX_PY_NZ = 25 # -X+Y-Z
+ACTION_MOVE_NX_NY_PZ = 26 # -X-Y+Z
+ACTION_MOVE_NX_NY_NZ = 27 # -X-Y-Z
+
+# No Operation (Index 28)
+ACTION_NO_OP = 28
+
+# Map indices to names for clarity (optional)
+ACTION_NAMES = {
+    0: "Open Gripper", 1: "Close Gripper",
+    2: "Move +X", 3: "Move -X", 4: "Move +Y", 5: "Move -Y", 6: "Move +Z", 7: "Move -Z",
+    8: "Move +X+Y", 9: "Move +X-Y", 10: "Move -X+Y", 11: "Move -X-Y",
+    12: "Move +X+Z", 13: "Move +X-Z", 14: "Move -X+Z", 15: "Move -X-Z",
+    16: "Move +Y+Z", 17: "Move +Y-Z", 18: "Move -Y+Z", 19: "Move -Y-Z",
+    20: "Move +X+Y+Z", 21: "Move +X+Y-Z", 22: "Move +X-Y+Z", 23: "Move +X-Y-Z",
+    24: "Move -X+Y+Z", 25: "Move -X+Y-Z", 26: "Move -X-Y+Z", 27: "Move -X-Y-Z",
+    28: "No-Op",
+}
+
+gripper_threshold = 50
+movement_threshold = 0.01
+gripper_open_signal = 0.
+gripper_close_signal = 100
+step_size = movement_threshold
+
+# The Map: Index -> (dx, dy, dz, gripper_signal)
+discrete_index_to_vector_map = {
+    # Gripper Actions
+    ACTION_OPEN_GRIPPER:  (0.0, 0.0, 0.0, gripper_open_signal),
+    ACTION_CLOSE_GRIPPER: (0.0, 0.0, 0.0, gripper_close_signal),
+
+    # Single Axis Movement
+    ACTION_MOVE_PX: ( step_size,  0.0,  0.0, 0.0),
+    ACTION_MOVE_NX: (-step_size,  0.0,  0.0, 0.0),
+    ACTION_MOVE_PY: ( 0.0,  step_size,  0.0, 0.0),
+    ACTION_MOVE_NY: ( 0.0, -step_size,  0.0, 0.0),
+    ACTION_MOVE_PZ: ( 0.0,  0.0,  step_size, 0.0),
+    ACTION_MOVE_NZ: ( 0.0,  0.0, -step_size, 0.0),
+
+    # Two Axis Movement (XY)
+    ACTION_MOVE_PX_PY: ( step_size,  step_size,  0.0, 0.0),
+    ACTION_MOVE_PX_NY: ( step_size, -step_size,  0.0, 0.0),
+    ACTION_MOVE_NX_PY: (-step_size,  step_size,  0.0, 0.0),
+    ACTION_MOVE_NX_NY: (-step_size, -step_size,  0.0, 0.0),
+    # Two Axis Movement (XZ)
+    ACTION_MOVE_PX_PZ: ( step_size,  0.0,  step_size, 0.0),
+    ACTION_MOVE_PX_NZ: ( step_size,  0.0, -step_size, 0.0),
+    ACTION_MOVE_NX_PZ: (-step_size,  0.0,  step_size, 0.0),
+    ACTION_MOVE_NX_NZ: (-step_size,  0.0, -step_size, 0.0),
+    # Two Axis Movement (YZ)
+    ACTION_MOVE_PY_PZ: ( 0.0,  step_size,  step_size, 0.0),
+    ACTION_MOVE_PY_NZ: ( 0.0,  step_size, -step_size, 0.0),
+    ACTION_MOVE_NY_PZ: ( 0.0, -step_size,  step_size, 0.0),
+    ACTION_MOVE_NY_NZ: ( 0.0, -step_size, -step_size, 0.0),
+
+    # Three Axis Movement
+    ACTION_MOVE_PX_PY_PZ: ( step_size,  step_size,  step_size, 0.0),
+    ACTION_MOVE_PX_PY_NZ: ( step_size,  step_size, -step_size, 0.0),
+    ACTION_MOVE_PX_NY_PZ: ( step_size, -step_size,  step_size, 0.0),
+    ACTION_MOVE_PX_NY_NZ: ( step_size, -step_size, -step_size, 0.0),
+    ACTION_MOVE_NX_PY_PZ: (-step_size,  step_size,  step_size, 0.0),
+    ACTION_MOVE_NX_PY_NZ: (-step_size,  step_size, -step_size, 0.0),
+    ACTION_MOVE_NX_NY_PZ: (-step_size, -step_size,  step_size, 0.0),
+    ACTION_MOVE_NX_NY_NZ: (-step_size, -step_size, -step_size, 0.0),
+
+    # No Operation
+    ACTION_NO_OP: (0.0, 0.0, 0.0, 0.0)
+}
+
 class GenesisDemoHolder:
     """
     Class to hold the demo data for the Genesis environment.
     """
     def __init__(self, max_demos=float('inf'), use_eef=False, subsample_ratio=1):
-
-        self.dir = pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials/')
+        self.dir = pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials/')
         self.paths = self.dir.glob('*episodes.npy')
         self.subsample_ratio = subsample_ratio
         self.use_eef = use_eef
@@ -170,6 +275,71 @@ class GenesisDemoHolder:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             np.save(output_path, new_d)
 
+    def convert_single_joint_to_eef(self, genesis_arm, joint_action):
+        # convert the current demo to a eef demo
+        joint_pos_theta, gripper_pos = joint_action[:6], joint_action[6:]
+        joint_pos, joint_quat = genesis_arm.forward_kinematics(torch.tensor(joint_pos_theta))
+        eef_pos = joint_pos[6].cpu().numpy(); eef_quat = joint_quat[6].cpu().numpy()
+        eef_euler = gs.utils.geom.quat_to_xyz(eef_quat)
+        eef_action = np.concatenate((eef_pos, eef_euler, gripper_pos), axis=-1)
+        return eef_action
+
+    def convert_single_eef_to_discrete(self, genesis_arm, continuous_action, previous_gripper_state=None):
+        if len(continuous_action) != 7:
+            raise ValueError("Input action must have 7 dimensions.")
+
+        dx, dy, dz = continuous_action[0:3]
+        gripper = continuous_action[6]
+
+        # --- Gripper Precedence ---
+        if previous_gripper_state is None:
+            if gripper > gripper_threshold:
+                return ACTION_OPEN_GRIPPER
+            elif gripper < -gripper_threshold:
+                return ACTION_CLOSE_GRIPPER
+        else:
+            if gripper > gripper_threshold and previous_gripper_state == ACTION_CLOSE_GRIPPER:
+                return ACTION_OPEN_GRIPPER
+            elif gripper < -gripper_threshold and previous_gripper_state == ACTION_OPEN_GRIPPER:
+                return ACTION_CLOSE_GRIPPER
+
+        # --- Movement Handling (only if no gripper action) ---
+        sig_x = abs(dx) >= movement_threshold
+        sig_y = abs(dy) >= movement_threshold
+        sig_z = abs(dz) >= movement_threshold
+
+        dir_x = np.sign(dx) # Returns 1.0, -1.0, or 0.0
+        dir_y = np.sign(dy)
+        dir_z = np.sign(dz)
+
+        num_sig_axes = sum([sig_x, sig_y, sig_z])
+
+        if num_sig_axes == 0:
+            return ACTION_NO_OP
+        elif num_sig_axes == 1:
+            if sig_x: return ACTION_MOVE_PX if dir_x > 0 else ACTION_MOVE_NX
+            if sig_y: return ACTION_MOVE_PY if dir_y > 0 else ACTION_MOVE_NY
+            if sig_z: return ACTION_MOVE_PZ if dir_z > 0 else ACTION_MOVE_NZ
+        elif num_sig_axes == 2:
+            if sig_x and sig_y:
+                if dir_x > 0: return ACTION_MOVE_PX_PY if dir_y > 0 else ACTION_MOVE_PX_NY
+                else:       return ACTION_MOVE_NX_PY if dir_y > 0 else ACTION_MOVE_NX_NY
+            elif sig_x and sig_z:
+                if dir_x > 0: return ACTION_MOVE_PX_PZ if dir_z > 0 else ACTION_MOVE_PX_NZ
+                else:       return ACTION_MOVE_NX_PZ if dir_z > 0 else ACTION_MOVE_NX_NZ
+            elif sig_y and sig_z: # sig_y and sig_z must be true
+                if dir_y > 0: return ACTION_MOVE_PY_PZ if dir_z > 0 else ACTION_MOVE_PY_NZ
+                else:       return ACTION_MOVE_NY_PZ if dir_z > 0 else ACTION_MOVE_NY_NZ
+        elif num_sig_axes == 3:
+            if dir_x > 0:
+                if dir_y > 0: return ACTION_MOVE_PX_PY_PZ if dir_z > 0 else ACTION_MOVE_PX_PY_NZ
+                else:       return ACTION_MOVE_PX_NY_PZ if dir_z > 0 else ACTION_MOVE_PX_NY_NZ
+            else: # dir_x < 0
+                if dir_y > 0: return ACTION_MOVE_NX_PY_PZ if dir_z > 0 else ACTION_MOVE_NX_PY_NZ
+                else:       return ACTION_MOVE_NX_NY_PZ if dir_z > 0 else ACTION_MOVE_NX_NY_NZ
+
+        # Should not be reached if logic is correct, but as a fallback:
+        return ACTION_NO_OP
 if __name__ == '__main__':
     from genesis_sim2real.envs.genesis_gym import _normalize_action, _unnormalize_action
     demo_holder = GenesisDemoHolder(max_demos=10, use_eef=False)

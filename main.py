@@ -1,4 +1,4 @@
-from genesis_sim2real.envs.dev_genesis_gym import GenesisGym
+from genesis_sim2real.envs.genesis_gym import GenesisGym
 from genesis_sim2real.envs.demo_holder import GenesisDemoHolder
 from genesis_sim2real.envs.genesis_gym import DEFAULT_FRICTION, DEFAULT_HEIGHT, DEFAULT_RADIUS, DEFAULT_RHO, DEFAULT_STARTING_X
 import numpy as np
@@ -24,7 +24,7 @@ if __name__ == '__main__':
     parser.add_argument('--env-name', type=str, default='lift', help='Environment name')
     args = parser.parse_args()
 
-    use_eef = True
+    use_eef = False
 
 
 
@@ -52,6 +52,8 @@ if __name__ == '__main__':
 
             return ret
     trial_id = demo_player.get_trial_id()
+
+    TRIAL_CAN_ADJUSTED = defaultdict(lambda: False)
 
     # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
     while True:
@@ -96,6 +98,22 @@ if __name__ == '__main__':
             if reward > max_reward:
                 max_reward = reward
 
+            # if the gripper action is closing and the can is nearby, move the can and restart the demo
+            gripper_pos = env.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
+            can_pose = env.bottle.get_pos().cpu().numpy()
+            dp = np.linalg.norm(gripper_pos - can_pose)
+            if action[-1] > 0.5 and dp < 0.2 and not TRIAL_CAN_ADJUSTED[trial_id]:
+                print("Gripper closing and can is nearby, restarting demo")
+                # get the average pos of the last 4 links 
+                grip_pos = env.get_grip_pose()
+                env.reset(trial_id=trial_id)
+                demo_player.reset_current_demo()
+                env.set_can_to_pose(grip_pos)
+                TRIAL_CAN_ADJUSTED[trial_id] = True
+                
+                # env.reset(trial_id=trial_id)
+                # continue
+
 
             demonstrations[trial_id]['image'].append(obs['image'])
             demonstrations[trial_id]['state'].append(obs['state'])
@@ -115,7 +133,7 @@ if __name__ == '__main__':
     # Save the demonstrations to a file
     for trial_id, demo in demonstrations.items():
         # save the demo out
-        output_path = pl.Path(f'./inthewild_trials_eef_SB3/{trial_id}_episodes.npy')
+        output_path = pl.Path(f'./inthewild_trials_{"eef_" if use_eef else ""}SB3/{trial_id}_episodes.npy')
         # make the new directory if it doesn't exist
         output_path.parent.mkdir(parents=True, exist_ok=True)
         np.save(output_path, demo)
