@@ -191,13 +191,6 @@
     <limit effort="7" lower="-2.53" upper="2.53" velocity="1.6"/>
   </joint>
   <link name="end_effector_link"/>
-  <joint name="joint_6" type="revolute">
-    <origin rpy="0 -1.5708 0" xyz="-0.105 0 0.0285"/>
-    <parent link="upper_wrist_link"/>
-    <child link="end_effector_link"/>
-    <axis xyz="0 0 1"/>
-    <limit effort="7" lower="-2.6" upper="2.6" velocity="3.2"/>
-  </joint>
   <link name="dummy_link">
     <inertial>
       <origin rpy="0 0 0" xyz="0 0 0.1"/>
@@ -205,7 +198,7 @@
       <inertia ixx="1E-08" ixy="0" ixz="0" iyy="1E-08" iyz="0" izz="1E-08"/>
     </inertial>
     <visual>
-      <origin rpy="0 0 0" xyz="0 0 0.1"/>
+      <origin rpy="0 0 0" xyz="0 0 1.0"/>
       <geometry>
         <mesh filename="camprop.STL" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -220,6 +213,13 @@
       </geometry>
     </collision>
   </link>
+  <joint name="joint_6" type="revolute">
+    <origin rpy="0 -1.5708 0" xyz="-0.105 0 0.0285"/>
+    <parent link="upper_wrist_link"/>
+    <child link="end_effector_link"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="7" lower="-2.6" upper="2.6" velocity="3.2"/>
+  </joint>
   <joint name="end_effector" type="fixed">
     <origin rpy="0 0 0" xyz="0 0 0"/>
     <parent link="end_effector_link"/>

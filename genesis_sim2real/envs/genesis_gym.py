@@ -63,7 +63,7 @@ class GenesisGym(gymnasium.Env):
             'friction': kwargs['friction'] if 'friction' in kwargs else DEFAULT_FRICTION,
             'vis': kwargs['vis'] if 'vis' in kwargs else False,
             'grayscale': kwargs['grayscale'] if 'grayscale' in kwargs else False,
-            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 800,
+            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 4000,
             'env_name': kwargs['env_name'] if 'env_name' in kwargs else 'lift',
             # 'starting_x': args.starting_x if 'starting_x' in args else 0.65
             }
@@ -253,6 +253,9 @@ class GenesisGym(gymnasium.Env):
         elif trial_id in TRIALS_POSITION_2: bottle_pos = POSITION_2
         else: rand_idx = random.randint(0,2); bottle_pos = [POSITION_0, POSITION_1, POSITION_2][rand_idx]
 
+        # add some gaussian noise in the x and y direction
+        bottle_pos += 0.01 * torch.Tensor([torch.randn(1), torch.randn(1), 0.0])
+
         self.bottle.set_pos(bottle_pos); self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
         self.goal_bottle.set_pos(STATIC_BOTTLE_POSITION); self.goal_bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
         self.box.set_pos(self.box_pos); self.box.set_quat(torch.Tensor([1, 0, 0, 0]))
@@ -331,7 +334,7 @@ class GenesisGym(gymnasium.Env):
         output_force = [0., 0.] #, 0., 0.]
         motor_cmd = (100 - cmd_gripper_pos) / 100
         
-        if motor_cmd > 0.6: motor_cmd = max([0.9], motor_cmd) # make the gripper close more
+        if motor_cmd > 0.5: motor_cmd = max([0.9], motor_cmd) # make the gripper close more
 
         right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
         left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
@@ -384,41 +387,50 @@ class GenesisGym(gymnasium.Env):
         self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
         self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
 
-    def compute_reward(self, obs):
+    def compute_reward(self, vstate):
         reward = 0.
         done = False
         bottle_pos = self.bottle.get_pos()
 
-        # Cup to goal distance
-        # goal_pos = self.goal_bottle.get_pos()
-        # distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
-        # reward = -distance.item() # TODO: implement reward function
-        # done = reward > -0.1 and (bottle_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.07)) and (goal_pos[2].cpu().numpy().item() >= (STATIC_BOTTLE_POSITION[2] - 0.07))
-        # cup slide contact
 
-        # Pick up the cup, and penalize for contact with the ground plane.
         plane_contacts = self.kinova.get_contacts(self.plane)
-        if self.args['env_name'] == 'point':
-            eef_joint_pos = self.eef_link.get_pos().cpu().numpy()
-            goal_pos = self.goal_bottle.get_pos().cpu().numpy()
-            distance = np.linalg.norm(eef_joint_pos - goal_pos, ord=2)
-            reward -= distance
-            if distance < 0.1:
-                print(f"SUCCESS!")
-                reward = 1.
-                done = True
-            # else:
-                # print the points and distance
-                # print(f"Distance: {distance:.2f}, EEF pos: {eef_joint_pos}, Goal pos: {goal_pos}")
-        else:
+        if DO_REAL_TASK := False:
+            # Cup to goal distance
+            goal_pos = self.goal_bottle.get_pos()
+            distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
             if plane_contacts['position'].shape[0] > 0:
                 # print(f"CONTACT with plane.")
                 reward -= 0.001
-            elif bottle_pos[2].cpu().numpy().item() >= 0.14: # lift task
-                print(f"SUCCESS!")
+            elif distance < 0.05 and vstate[-1] < -0.5: # open gripper and close to goal
+                print(f"SUCCESS! {distance.item():.2f} {vstate[-1]:.2f}")
                 reward = 1.
                 done = True
-        ## pick up cup
+
+            # print(f'{vstate[-1]:+1.2f}')
+            # cup slide contact
+        else:
+            # Pick up the cup, and penalize for contact with the ground plane.
+            if self.args['env_name'] == 'point':
+                eef_joint_pos = self.eef_link.get_pos().cpu().numpy()
+                goal_pos = self.goal_bottle.get_pos().cpu().numpy()
+                distance = np.linalg.norm(eef_joint_pos - goal_pos, ord=2)
+                reward -= distance
+                if distance < 0.1:
+                    print(f"SUCCESS!")
+                    reward = 1.
+                    done = True
+                # else:
+                    # print the points and distance
+                    # print(f"Distance: {distance:.2f}, EEF pos: {eef_joint_pos}, Goal pos: {goal_pos}")
+            else:
+                if plane_contacts['position'].shape[0] > 0:
+                    # print(f"CONTACT with plane.")
+                    reward -= 0.001
+                elif bottle_pos[2].cpu().numpy().item() >= 0.14: # lift task
+                    print(f"SUCCESS!")
+                    reward = 1.
+                    done = True
+            ## pick up cup
 
         return reward, done
 
@@ -441,9 +453,9 @@ class GenesisGym(gymnasium.Env):
 
     def get_grip_pose(self):
         # get the average position of the fingertips
-        left_fingertip = self.kinova.get_link('left_finger_bottom_joint').get_pos().cpu().numpy()
-        right_fingertip = self.kinova.get_link('right_finger_bottom_joint').get_pos().cpu().numpy()
-        return np.mean([left_fingertip, right_fingertip], axis=0)
+        left_fingertip = self.kinova.get_link('left_finger_prox_link').get_pos().cpu().numpy()
+        right_fingertip = self.kinova.get_link('right_finger_prox_link').get_pos().cpu().numpy()
+        return np.mean([left_fingertip, right_fingertip], axis=0) + [0.02, 0., 0.]
     
     def set_can_to_pose(self, pos):
         self.bottle.set_pos(pos)

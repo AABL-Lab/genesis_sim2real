@@ -56,6 +56,7 @@ if __name__ == '__main__':
     TRIAL_CAN_ADJUSTED = defaultdict(lambda: False)
 
     # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
+    video_frames = []
     while True:
         # action = env.action_space.sample()  # Sample random action
         action = get_action()
@@ -82,6 +83,20 @@ if __name__ == '__main__':
             # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
             trials += 1; steps = 0; done = False
 
+            # write out the video if it was successful:
+            if reward > 0:
+                # make the new directory if it doesn't exist
+                pl.Path(f'./videos').mkdir(parents=True, exist_ok=True)
+                video_frames = np.array(video_frames)
+                video_path = f'./videos/{trial_id}_video.mp4'
+                out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 30, (video_frames.shape[2], video_frames.shape[1]))
+                for frame in video_frames:
+                    out.write(frame)
+                out.release()
+                print(f"Video saved to {video_path}")
+
+            video_frames= []
+
             # write out a histogram of the dp
             # plt.hist(env.dp, bins=50, range=(0, 0.2), alpha=0.5)
             # plt.title(f"Demo {trial_id} DP Histogram")
@@ -98,22 +113,21 @@ if __name__ == '__main__':
             if reward > max_reward:
                 max_reward = reward
 
+            video_frames.append(obs['image'])
+
             # if the gripper action is closing and the can is nearby, move the can and restart the demo
             gripper_pos = env.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
             can_pose = env.bottle.get_pos().cpu().numpy()
             dp = np.linalg.norm(gripper_pos - can_pose)
             if action[-1] > 0.5 and dp < 0.2 and not TRIAL_CAN_ADJUSTED[trial_id]:
-                print("Gripper closing and can is nearby, restarting demo")
                 # get the average pos of the last 4 links 
                 grip_pos = env.get_grip_pose()
                 env.reset(trial_id=trial_id)
                 demo_player.reset_current_demo()
-                env.set_can_to_pose(grip_pos)
+                env.set_can_to_pose(torch.Tensor(grip_pos))
+                print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
                 TRIAL_CAN_ADJUSTED[trial_id] = True
                 
-                # env.reset(trial_id=trial_id)
-                # continue
-
 
             demonstrations[trial_id]['image'].append(obs['image'])
             demonstrations[trial_id]['state'].append(obs['state'])

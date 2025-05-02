@@ -115,7 +115,7 @@ class GenesisDemoHolder:
     Class to hold the demo data for the Genesis environment.
     """
     def __init__(self, max_demos=float('inf'), use_eef=False, subsample_ratio=1):
-        self.dir = pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials/')
+        self.dir = pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials/')
         self.paths = self.dir.glob('*episodes.npy')
         self.subsample_ratio = subsample_ratio
         self.use_eef = use_eef
