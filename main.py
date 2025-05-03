@@ -1,6 +1,6 @@
 from genesis_sim2real.envs.genesis_gym import GenesisGym
 from genesis_sim2real.envs.demo_holder import GenesisDemoHolder
-from genesis_sim2real.envs.genesis_gym import DEFAULT_FRICTION, DEFAULT_HEIGHT, DEFAULT_RADIUS, DEFAULT_RHO, DEFAULT_STARTING_X
+from genesis_sim2real.envs.genesis_gym import DEFAULT_FRICTION, DEFAULT_HEIGHT, DEFAULT_RADIUS, DEFAULT_RHO, DEFAULT_STARTING_X, STATIC_BOTTLE_POSITION, PZ
 import numpy as np
 import cv2
 import os
@@ -119,11 +119,20 @@ if __name__ == '__main__':
             gripper_pos = env.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
             can_pose = env.bottle.get_pos().cpu().numpy()
             dp = np.linalg.norm(gripper_pos - can_pose)
-            if action[-1] > 0.5 and dp < 0.2 and not TRIAL_CAN_ADJUSTED[trial_id]:
+            if action[-1] > 50 and dp < 0.2 and not TRIAL_CAN_ADJUSTED[trial_id] and gripper_pos[2] < 0.5:
                 # get the average pos of the last 4 links 
                 grip_pos = env.get_grip_pose()
+                grip_pos[-1] = PZ
+                # make a debug sphere
+                # debug_arrow = env.scene.draw_debug_arrow(pos=gripper_pos, vec=grip_pos - gripper_pos, radius=0.01, color=(1, 0, 0, 0.5))  # Green
+                # env.scene.draw_debug_sphere(gripper_pos, 0.01, color=(0, 1, 1))
+                # env.scene.draw_debug_sphere(grip_pos, 0.01, color=(0, 0, 1))
                 env.reset(trial_id=trial_id)
                 demo_player.reset_current_demo()
+
+                for _ in range(10):
+                    env.scene.step() # let the arm get back before we reset the can
+
                 env.set_can_to_pose(torch.Tensor(grip_pos))
                 print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
                 TRIAL_CAN_ADJUSTED[trial_id] = True

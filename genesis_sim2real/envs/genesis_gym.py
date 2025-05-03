@@ -125,7 +125,7 @@ class GenesisGym(gymnasium.Env):
 
         BOTTLE_RADIUS = self.args['radius']
         BOTTLE_HEIGHT = self.args['height']
-        BOX_WIDTH, BOX_HEIGHT = 0.75, 0.14
+        BOX_WIDTH, BOX_HEIGHT = 0.75, 0.12
 
         self.box_pos = torch.Tensor((0.78, -BOX_WIDTH / 4, 0.02))
         self.box = scene.add_entity(
@@ -394,7 +394,7 @@ class GenesisGym(gymnasium.Env):
 
 
         plane_contacts = self.kinova.get_contacts(self.plane)
-        if DO_REAL_TASK := False:
+        if DO_REAL_TASK := True:
             # Cup to goal distance
             goal_pos = self.goal_bottle.get_pos()
             distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
@@ -405,6 +405,8 @@ class GenesisGym(gymnasium.Env):
                 print(f"SUCCESS! {distance.item():.2f} {vstate[-1]:.2f}")
                 reward = 1.
                 done = True
+            elif distance < 0.1:
+                print(f"{distance.item():.2f} {vstate[-1]:.2f}")
 
             # print(f'{vstate[-1]:+1.2f}')
             # cup slide contact
@@ -455,10 +457,11 @@ class GenesisGym(gymnasium.Env):
         # get the average position of the fingertips
         left_fingertip = self.kinova.get_link('left_finger_prox_link').get_pos().cpu().numpy()
         right_fingertip = self.kinova.get_link('right_finger_prox_link').get_pos().cpu().numpy()
-        return np.mean([left_fingertip, right_fingertip], axis=0) + [0.02, 0., 0.]
+        return np.mean([left_fingertip, right_fingertip], axis=0) + [0.04, 0., 0.]
     
     def set_can_to_pose(self, pos):
         self.bottle.set_pos(pos)
+        self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
 
     def render(self, mode='human', use_imshow=False):
         # Render the scene
