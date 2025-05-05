@@ -116,6 +116,11 @@ class GenesisDemoHolder:
     """
     def __init__(self, max_demos=float('inf'), use_eef=False, subsample_ratio=1):
         self.dir = pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials/')
+        # check if the directory exists
+        if not self.dir.exists():
+            self.dir = pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials/')
+
+
         self.paths = self.dir.glob('*episodes.npy')
         self.subsample_ratio = subsample_ratio
         self.use_eef = use_eef
@@ -195,7 +200,7 @@ class GenesisDemoHolder:
             self.COMPLETED = True
             return -1
         trial_id = self.demos[self.idx][0]
-        print(f"Demo {trial_id} loaded")
+        print(f"Demo {trial_id} loaded. {len(self.demos[self.idx][1])} actions.")
         return trial_id
     
     def reset_current_demo(self):

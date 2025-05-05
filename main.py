@@ -54,6 +54,7 @@ if __name__ == '__main__':
     trial_id = demo_player.get_trial_id()
 
     TRIAL_CAN_ADJUSTED = defaultdict(lambda: False)
+    ADJUSTED_CAN_POS = {}
 
     # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
     video_frames = []
@@ -86,9 +87,10 @@ if __name__ == '__main__':
             # write out the video if it was successful:
             if reward > 0:
                 # make the new directory if it doesn't exist
-                pl.Path(f'./videos').mkdir(parents=True, exist_ok=True)
+                vid_dir = f'./videos_ss{args.subsample}'
+                pl.Path(vid_dir).mkdir(parents=True, exist_ok=True)
                 video_frames = np.array(video_frames)
-                video_path = f'./videos/{trial_id}_video.mp4'
+                video_path = f'{vid_dir}/{trial_id}_video.mp4'
                 out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 30, (video_frames.shape[2], video_frames.shape[1]))
                 for frame in video_frames:
                     out.write(frame)
@@ -130,11 +132,14 @@ if __name__ == '__main__':
                 env.reset(trial_id=trial_id)
                 demo_player.reset_current_demo()
 
+                env.step(get_action())
+
                 for _ in range(10):
                     env.scene.step() # let the arm get back before we reset the can
 
                 env.set_can_to_pose(torch.Tensor(grip_pos))
                 print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
+                ADJUSTED_CAN_POS[trial_id] = grip_pos
                 TRIAL_CAN_ADJUSTED[trial_id] = True
                 
 
@@ -150,6 +155,10 @@ if __name__ == '__main__':
             # if reward > -0.10:
             #     print(f"Reward: {reward}")
 
+    # save out the ADJUSTED_CAN_POS dictionary to a file
+    adjusted_can_pos_path = f'./trial_can_adjusted.npy'
+    np.save(adjusted_can_pos_path, ADJUSTED_CAN_POS)
+
     print(f"Trials: {trials} Successful Trials: {successful_trials} Success Rate: {successful_trials/trials:.2%}")
     print(f"Pickups: {pickups} Pickup Rate: {pickups/trials:.2%}")
 
@@ -162,8 +171,9 @@ if __name__ == '__main__':
         np.save(output_path, demo)
 
     # Append the results to a file. Create it if it doesn't exist.
-    pl.Path('results').mkdir(parents=True, exist_ok=True)
-    with open('results/results.txt', 'a') as f:
+    output_dir = f'results'
+    pl.Path(output_dir).mkdir(parents=True, exist_ok=True)
+    with open(f'{output_dir}/results.txt', 'a') as f:
         f.write(f"subsample ratio {args.subsample} -- {'EEF' if use_eef else ''} {successful_trials/trials:.2%}\n")
         f.write(f"Trials: {trials} Successful Trials: {successful_trials} Success Rate: {successful_trials/trials:.2%}\n")
         f.write(f"Pickups: {pickups} Pickup Rate: {pickups/trials:.2%}\n")

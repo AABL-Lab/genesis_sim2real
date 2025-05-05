@@ -19,7 +19,7 @@ POSITION_1 = torch.tensor((PX, -0.05, PZ))
 POSITION_2 = torch.tensor((PX, -0.2, PZ))
 
 ## Default Args
-DEFAULT_RADIUS = 0.034
+DEFAULT_RADIUS = 0.03
 DEFAULT_HEIGHT = 0.09
 DEFAULT_RHO = 2000
 DEFAULT_FRICTION = 0.5
@@ -54,7 +54,7 @@ class GenesisGym(gymnasium.Env):
     # action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 100.]), shape=(5,), dtype=np.float32) 
 
 
-    def __init__(self, size=(96, 96), use_truncated_in_return=False, debug=False, stable_baselines=False, **kwargs):
+    def __init__(self, size=(96, 96), use_truncated_in_return=False, debug=False, stable_baselines=False, check_saved_positions=False, **kwargs):
         super().__init__()
         self.args = {
             'rho': kwargs['rho'] if 'rho' in kwargs else DEFAULT_RHO,
@@ -107,13 +107,26 @@ class GenesisGym(gymnasium.Env):
         self.dp = []
         self.total_steps = 0; self.n_steps = 0
 
+        self.check_saved_positions = check_saved_positions
+        if self.check_saved_positions:
+            adjusted_can_pos_path = pl.Path(f'~/workspace/genesis_sim2real/trial_can_adjusted.npy').expanduser()
+            self.adjusted_can_pos = None
+            if adjusted_can_pos_path.exists():
+                print(f"Loading adjusted can positions from {adjusted_can_pos_path}")
+                adjusted_can_pos = np.load(adjusted_can_pos_path, allow_pickle=True).item()
+                for trial_id, pos in adjusted_can_pos.items():
+                    print(f"Trial {trial_id} adjusted can position: trial_id > 0 and {pos}")
+                self.adjusted_can_pos = adjusted_can_pos
+            else: print(f"WARNING: No adjusted can positions found at {adjusted_can_pos_path}. Will not check for adjusted can positions.")
+
 
     def _max_episode_steps(self):
         return self.args['time_limit']
         # return 100
 
     def init_env(self):
-        self.kp = kp = 5
+        self.kp = kp = 2
+        self.gripper_kp = 10
 
         self.scene = scene = gs.Scene(
             show_viewer=self.args['vis'],
@@ -204,7 +217,7 @@ class GenesisGym(gymnasium.Env):
         ############ Optional: set control gains ############
         # set positional gains
         kinova.set_dofs_kp(
-            kp             = 3*np.array([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]),
+            kp             = self.kp*np.array([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]),
             dofs_idx_local = kdofs_idx,
         )
         kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), kdofs_idx)
@@ -248,13 +261,22 @@ class GenesisGym(gymnasium.Env):
         # Reset the scene and get the initial observation
         self.n_steps = 0
 
-        if trial_id in TRIALS_POSITION_0: bottle_pos = POSITION_0
+        if trial_id > 0 and self.check_saved_positions and self.adjusted_can_pos is not None:
+            # check if the trial_id is in the adjusted_can_pos
+            if trial_id in self.adjusted_can_pos:
+                print(f"Trial {trial_id} adjusted can position: {self.adjusted_can_pos[trial_id]}")
+                bottle_pos = torch.Tensor(self.adjusted_can_pos[trial_id])
+            else:
+                print(f"Trial {trial_id} not in adjusted can positions. Using default position.")
+                bottle_pos = POSITION_0
+        elif trial_id in TRIALS_POSITION_0: bottle_pos = POSITION_0
         elif trial_id in TRIALS_POSITION_1: bottle_pos = POSITION_1
         elif trial_id in TRIALS_POSITION_2: bottle_pos = POSITION_2
         else: rand_idx = random.randint(0,2); bottle_pos = [POSITION_0, POSITION_1, POSITION_2][rand_idx]
 
         # add some gaussian noise in the x and y direction
-        bottle_pos += 0.01 * torch.Tensor([torch.randn(1), torch.randn(1), 0.0])
+        random_offset = 0.005 * torch.Tensor([torch.randn(1), torch.randn(1), 0.0])
+        bottle_pos += random_offset
 
         self.bottle.set_pos(bottle_pos); self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
         self.goal_bottle.set_pos(STATIC_BOTTLE_POSITION); self.goal_bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
@@ -334,15 +356,15 @@ class GenesisGym(gymnasium.Env):
         output_force = [0., 0.] #, 0., 0.]
         motor_cmd = (100 - cmd_gripper_pos) / 100
         
-        if motor_cmd > 0.5: motor_cmd = max([0.9], motor_cmd) # make the gripper close more
+        if motor_cmd > 0.5: motor_cmd = max([1.0], motor_cmd) # make the gripper close more
 
         right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
         left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
         right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > threshold else 0.0
         left_fingertip_error = pos[-1] - KINOVA_START_DOFS_POS[-1]; left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > threshold else 0.0
 
-        output_force[0] = -self.kp*right_error[0];# output_force[2] = self.kp*right_fingertip_error
-        output_force[1] = -self.kp*left_error[0]; #output_force[3] = self.kp*left_fingertip_error
+        output_force[0] = -self.gripper_kp*right_error[0];# output_force[2] = self.kp*right_fingertip_error
+        output_force[1] = -self.gripper_kp*left_error[0]; #output_force[3] = self.kp*left_fingertip_error
         # print(output_force)
         return np.array(output_force)
 
@@ -401,12 +423,18 @@ class GenesisGym(gymnasium.Env):
             if plane_contacts['position'].shape[0] > 0:
                 # print(f"CONTACT with plane.")
                 reward -= 0.001
-            elif distance < 0.05 and vstate[-1] < -0.5: # open gripper and close to goal
-                print(f"SUCCESS! {distance.item():.2f} {vstate[-1]:.2f}")
-                reward = 1.
-                done = True
-            elif distance < 0.1:
-                print(f"{distance.item():.2f} {vstate[-1]:.2f}")
+            elif distance < 0.09: # and vstate[-1] < -0.5: # open gripper and close to goal
+                # make sure the gripper and bottle are not in collision
+                bottle_contacts = self.kinova.get_contacts(self.bottle)
+                if bottle_contacts['position'].shape[0] > 0:
+                    print(f"CONTACT with bottle at distance {distance.item():.2f} {vstate[-1]:.2f}")
+                    # reward -= 0.001
+                else:
+                    print(f"SUCCESS! {distance.item():.2f} {vstate[-1]:.2f}")
+                    reward = 1.
+                    done = True
+            # elif distance < 0.15:
+            #     print(f"{distance.item():.2f} {vstate[-1]:.2f} ")
 
             # print(f'{vstate[-1]:+1.2f}')
             # cup slide contact
