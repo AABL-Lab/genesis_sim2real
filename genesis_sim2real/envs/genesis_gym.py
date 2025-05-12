@@ -9,6 +9,13 @@ import cv2
 import torch
 from genesis_sim2real.envs.kinova import JOINT_NAMES as kinova_joint_names, EEF_NAME as kinova_eef_name, TRIALS_POSITION_0, TRIALS_POSITION_1, TRIALS_POSITION_2
 from matplotlib import pyplot as plt
+from geometry_msgs.msg import PoseStamped
+
+if DIGITAL_TWIN := True:
+    import rospy
+    import armpy
+    from sensor_msgs.msg import JointState
+
 
 FINGERTIP_POS = -0.9
 KINOVA_START_DOFS_POS = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945, -1, 1, FINGERTIP_POS, FINGERTIP_POS]
@@ -63,7 +70,7 @@ class GenesisGym(gymnasium.Env):
             'friction': kwargs['friction'] if 'friction' in kwargs else DEFAULT_FRICTION,
             'vis': kwargs['vis'] if 'vis' in kwargs else False,
             'grayscale': kwargs['grayscale'] if 'grayscale' in kwargs else False,
-            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 4000,
+            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 1200,
             'env_name': kwargs['env_name'] if 'env_name' in kwargs else 'lift',
             # 'starting_x': args.starting_x if 'starting_x' in args else 0.65
             }
@@ -119,6 +126,21 @@ class GenesisGym(gymnasium.Env):
                 self.adjusted_can_pos = adjusted_can_pos
             else: print(f"WARNING: No adjusted can positions found at {adjusted_can_pos_path}. Will not check for adjusted can positions.")
 
+
+        self.DIGITAL_TWIN = DIGITAL_TWIN
+        if self.DIGITAL_TWIN:
+            self.arm = armpy.initialize('gen3_lite')
+            self.joint_state = None; self.gripper_closed = False; self.can_position = None
+            rospy.init_node("arm_reacher")
+            rospy.sleep(1.0)
+            rospy.Subscriber('/my_gen3_lite/base_feedback/joint_state', JointState, self.joint_state_callback)
+            rospy.Subscriber('/can_detector/pose', PoseStamped, self.can_pose_callback)
+
+    def joint_state_callback(self, msg):
+        self.joint_state = msg
+
+    def can_pose_callback(self, msg):
+        self.can_position = msg.pose.position
 
     def _max_episode_steps(self):
         return self.args['time_limit']
@@ -251,8 +273,17 @@ class GenesisGym(gymnasium.Env):
 
         self.n_steps += 1; self.total_steps += 1
 
+        if self.DIGITAL_TWIN and self.n_steps % 3 == 0:
+            self.arm.goto_joint_pose(action[:6], radians=True, block=True)
+            if not self.gripper_closed and action[-1] > 50:
+                self.arm.close_gripper(); self.gripper_closed = True
+            elif self.gripper_closed and action[-1] < 50:
+                self.arm.open_gripper(); self.gripper_closed = False
+
         if self.use_truncated_in_return:
             return obs, reward, done, self.n_steps >= self._max_episode_steps(), {'is_success': done}
+
+
         return obs, reward, done, {}
     
     def reset(self, trial_id=0, **kwargs):
@@ -261,7 +292,13 @@ class GenesisGym(gymnasium.Env):
         # Reset the scene and get the initial observation
         self.n_steps = 0
 
-        if trial_id > 0 and self.check_saved_positions and self.adjusted_can_pos is not None:
+        # add some gaussian noise in the x and y direction
+        # random_offset = 0.005 * torch.Tensor([torch.randn(1), torch.randn(1), 0.0])
+        if self.can_position is not None:
+            bottle_pos = torch.Tensor([self.can_position.x, self.can_position.y, self.can_position.z])
+            # random_offset = torch.zeros(3)
+            print(f"Sensed can position: {bottle_pos}")
+        elif trial_id > 0 and self.check_saved_positions and self.adjusted_can_pos is not None:
             # check if the trial_id is in the adjusted_can_pos
             if trial_id in self.adjusted_can_pos:
                 print(f"Trial {trial_id} adjusted can position: {self.adjusted_can_pos[trial_id]}")
@@ -274,9 +311,7 @@ class GenesisGym(gymnasium.Env):
         elif trial_id in TRIALS_POSITION_2: bottle_pos = POSITION_2
         else: rand_idx = random.randint(0,2); bottle_pos = [POSITION_0, POSITION_1, POSITION_2][rand_idx]
 
-        # add some gaussian noise in the x and y direction
-        random_offset = 0.005 * torch.Tensor([torch.randn(1), torch.randn(1), 0.0])
-        bottle_pos += random_offset
+        # bottle_pos += random_offset
 
         self.bottle.set_pos(bottle_pos); self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
         self.goal_bottle.set_pos(STATIC_BOTTLE_POSITION); self.goal_bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
@@ -295,6 +330,23 @@ class GenesisGym(gymnasium.Env):
             ret = obs, {}
         else:
             ret = obs
+
+        if self.DIGITAL_TWIN:
+            backup_position = [0.34551798719466237, -0.8454950565561763, 2.169129261535217, -1.232747441193471, 1.4586096006108726, -1.686383909690952] #, 0.5953540153613426]
+            target_joint_positions = [0.3268500269015339, -1.4471734542578538, 2.3453266624159497, -1.3502152158191212, 2.209384006676201, -1.5125125137062945] #, -0.0877648122691288]
+            print(f"Opening gripper ", end='')
+            self.arm.open_gripper(); rospy.sleep(1.0) # deal with problems from switching between vel mode and pos mode.
+            print(f"Done.")
+            while self.joint_state is None:
+                print(f"Waiting for joint state...")
+                rospy.sleep(1.0)
+            for tjp in [backup_position, target_joint_positions]:
+                while not np.allclose(self.joint_state.position[:6], tjp, atol=0.1):
+                    print(f"\tMoving to {tjp}. Distance from target {np.linalg.norm(np.array(self.joint_state.position[:6]) - np.array(tjp))}")
+                    self.arm.goto_joint_pose(tjp, radians=True, block=False)
+                    rospy.sleep(5.0)
+
+
         return ret
     
     def picture_in_picture(self, image0, image1):
@@ -483,9 +535,9 @@ class GenesisGym(gymnasium.Env):
 
     def get_grip_pose(self):
         # get the average position of the fingertips
-        left_fingertip = self.kinova.get_link('left_finger_prox_link').get_pos().cpu().numpy()
-        right_fingertip = self.kinova.get_link('right_finger_prox_link').get_pos().cpu().numpy()
-        return np.mean([left_fingertip, right_fingertip], axis=0) + [0.04, 0., 0.]
+        left_fingertip = self.kinova.get_link('left_finger_dist_link').get_pos().cpu().numpy()
+        right_fingertip = self.kinova.get_link('right_finger_dist_link').get_pos().cpu().numpy()
+        return np.mean([left_fingertip, right_fingertip], axis=0)
     
     def set_can_to_pose(self, pos):
         self.bottle.set_pos(pos)
