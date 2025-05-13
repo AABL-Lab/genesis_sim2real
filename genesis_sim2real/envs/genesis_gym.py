@@ -70,7 +70,7 @@ class GenesisGym(gymnasium.Env):
             'friction': kwargs['friction'] if 'friction' in kwargs else DEFAULT_FRICTION,
             'vis': kwargs['vis'] if 'vis' in kwargs else False,
             'grayscale': kwargs['grayscale'] if 'grayscale' in kwargs else False,
-            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 1200,
+            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 4000,
             'env_name': kwargs['env_name'] if 'env_name' in kwargs else 'lift',
             # 'starting_x': args.starting_x if 'starting_x' in args else 0.65
             }
@@ -84,7 +84,8 @@ class GenesisGym(gymnasium.Env):
         if not stable_baselines:
             self.observation_space = spaces.Dict({
                 "image": spaces.Box(low=0, high=255, shape=(*size, 3 if not self.args['grayscale'] else 1), dtype=np.uint8),
-                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
+                # "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # eef pos, angles, vel, and angvel and gripper state as well as can location
+                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(6 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location
                 'reward': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'is_first': spaces.Box(low=0, high=1, shape=(), dtype=bool),
                 'is_last': spaces.Box(low=0, high=1, shape=(), dtype=bool),
@@ -93,7 +94,8 @@ class GenesisGym(gymnasium.Env):
         else:
             self.observation_space = spaces.Dict({
                 "image": spaces.Box(low=0, high=255, shape=(*size, 3 if not self.args['grayscale'] else 1), dtype=np.uint8),
-                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
+                # "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # eef pos, angles, vel, and angvel and gripper state as well as can location
+                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(6 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location
             })
 
         self.last_arm_dofs = None
@@ -386,11 +388,11 @@ class GenesisGym(gymnasium.Env):
         eef_lin_vel = self.eef_link.get_vel().cpu().numpy() # linear velocity
         eef_ang_vel = self.eef_link.get_ang().cpu().numpy() # angular velocity
         bottle_pos = self.bottle.get_pos().cpu().numpy()
-        # state = np.concatenate((arm_pos, bottle_pos))
-
         finger_joint_pos = [arm_pos[-4]]
-
-        state = np.concatenate((eef_pos, eef_euler, eef_lin_vel, eef_ang_vel, bottle_pos, finger_joint_pos))
+        # state = np.concatenate((eef_pos, eef_euler, eef_lin_vel, eef_ang_vel, bottle_pos, finger_joint_pos))
+        
+        arm_no_gripper_pos = arm_pos[:-4]
+        state = np.concatenate((arm_no_gripper_pos, bottle_pos, finger_joint_pos))
 
         self.last_arm_dofs = arm_pos
 
@@ -472,19 +474,26 @@ class GenesisGym(gymnasium.Env):
             # Cup to goal distance
             goal_pos = self.goal_bottle.get_pos()
             distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
+
+            if bottle_pos[2].cpu().numpy().item() >= 0.14: # Give some shaped reward, if you lift the bottle you get a reward
+                reward += 0.01
+
             if plane_contacts['position'].shape[0] > 0:
                 # print(f"CONTACT with plane.")
                 reward -= 0.001
-            elif distance < 0.09: # and vstate[-1] < -0.5: # open gripper and close to goal
+            
+            if distance < 0.09: # and vstate[-1] < -0.5: # open gripper and close to goal
                 # make sure the gripper and bottle are not in collision
                 bottle_contacts = self.kinova.get_contacts(self.bottle)
                 if bottle_contacts['position'].shape[0] > 0:
-                    print(f"CONTACT with bottle at distance {distance.item():.2f} {vstate[-1]:.2f}")
+                    pass # Don't reward until the bottle is released
+                    # print(f"CONTACT with bottle at distance {distance.item():.2f} {vstate[-1]:.2f}")
                     # reward -= 0.001
                 else:
                     print(f"SUCCESS! {distance.item():.2f} {vstate[-1]:.2f}")
-                    reward = 1.
+                    reward = 10.
                     done = True
+
             # elif distance < 0.15:
             #     print(f"{distance.item():.2f} {vstate[-1]:.2f} ")
 
