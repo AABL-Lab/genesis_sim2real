@@ -27,7 +27,7 @@ POSITION_2 = torch.tensor((PX, -0.2, PZ))
 
 ## Default Args
 DEFAULT_RADIUS = 0.03
-DEFAULT_HEIGHT = 0.09
+DEFAULT_HEIGHT = 0.085
 DEFAULT_RHO = 2000
 DEFAULT_FRICTION = 0.5
 DEFAULT_STARTING_X = 0.65
@@ -70,7 +70,7 @@ class GenesisGym(gymnasium.Env):
             'friction': kwargs['friction'] if 'friction' in kwargs else DEFAULT_FRICTION,
             'vis': kwargs['vis'] if 'vis' in kwargs else False,
             'grayscale': kwargs['grayscale'] if 'grayscale' in kwargs else False,
-            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 4000,
+            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 2000, #4000,
             'env_name': kwargs['env_name'] if 'env_name' in kwargs else 'lift',
             # 'starting_x': args.starting_x if 'starting_x' in args else 0.65
             }
@@ -130,6 +130,7 @@ class GenesisGym(gymnasium.Env):
 
 
         self.DIGITAL_TWIN = DIGITAL_TWIN
+        self.angular_waypoints = [] 
         if self.DIGITAL_TWIN:
             self.arm = armpy.initialize('gen3_lite')
             self.joint_state = None; self.gripper_closed = False; self.can_position = None
@@ -160,8 +161,8 @@ class GenesisGym(gymnasium.Env):
             gs.morphs.Plane(),
         )
 
-        BOTTLE_RADIUS = self.args['radius']
-        BOTTLE_HEIGHT = self.args['height']
+        self.BOTTLE_RADIUS = BOTTLE_RADIUS = self.args['radius']
+        self.BOTTLE_HEIGHT = BOTTLE_HEIGHT = self.args['height']
         BOX_WIDTH, BOX_HEIGHT = 0.75, 0.12
 
         self.box_pos = torch.Tensor((0.78, -BOX_WIDTH / 4, 0.02))
@@ -190,7 +191,14 @@ class GenesisGym(gymnasium.Env):
             fov=45,
             GUI=False,
         )
-        
+
+        self.rec_cam = scene.add_camera(
+            res    = (1280, 960),
+            pos    = (-0.5, -0.4, 0.2),
+            lookat = (1.0, 0, 0.0),
+            fov    = 30,
+            GUI    = False
+        )
 
         # TODO: see if you can prevent the gripper from being convexified
         self.kinova = kinova = scene.add_entity(
@@ -275,12 +283,22 @@ class GenesisGym(gymnasium.Env):
 
         self.n_steps += 1; self.total_steps += 1
 
-        if self.DIGITAL_TWIN and self.n_steps % 3 == 0:
-            self.arm.goto_joint_pose(action[:6], radians=True, block=True)
-            if not self.gripper_closed and action[-1] > 50:
-                self.arm.close_gripper(); self.gripper_closed = True
-            elif self.gripper_closed and action[-1] < 50:
-                self.arm.open_gripper(); self.gripper_closed = False
+        # self.angular_waypoints.append(action[:6])
+        gripper_toggle = (action[-1] > 50 and not self.gripper_closed) or (action[-1] < 50 and self.gripper_closed)
+        if self.DIGITAL_TWIN and self.n_steps % 5 == 0 or gripper_toggle:
+        # if self.DIGITAL_TWIN and len(self.angular_waypoints) > 200 or gripper_toggle:
+        # if False and self.DIGITAL_TWIN and self.n_steps % 3 == 0:
+            # self.arm.goto_joint_waypoints(self.angular_waypoints, radians=True, block=True); self.angular_waypoints = []
+
+            self.arm.goto_joint_pose(action[:6], radians=True, block=False)
+            if gripper_toggle:
+                if self.gripper_closed:  self.arm.open_gripper(); self.gripper_closed = False
+                else: self.arm.close_gripper(); self.gripper_closed = True
+
+            # if not self.gripper_closed and action[-1] > 50:
+            #     self.arm.close_gripper(); self.gripper_closed = True
+            # elif self.gripper_closed and action[-1] < 50:
+            #     self.arm.open_gripper(); self.gripper_closed = False
 
         if self.use_truncated_in_return:
             return obs, reward, done, self.n_steps >= self._max_episode_steps(), {'is_success': done}
@@ -297,9 +315,15 @@ class GenesisGym(gymnasium.Env):
         # add some gaussian noise in the x and y direction
         # random_offset = 0.005 * torch.Tensor([torch.randn(1), torch.randn(1), 0.0])
         if self.can_position is not None:
-            bottle_pos = torch.Tensor([self.can_position.x, self.can_position.y, self.can_position.z])
-            # random_offset = torch.zeros(3)
-            print(f"Sensed can position: {bottle_pos}")
+            sensed_bottle_pos = torch.Tensor([self.can_position.x, self.can_position.y, self.can_position.z])
+            # apply a static offset that moves the position from the middle of the bottom of the can to the front face halfway up
+            static_offset = torch.Tensor([-self.BOTTLE_RADIUS * 0.8, self.BOTTLE_RADIUS * 0.2, self.BOTTLE_HEIGHT * 0.4])
+            print(f"Sensed can position: {sensed_bottle_pos}. Static offset: {static_offset}")
+
+            bottle_pos = sensed_bottle_pos + static_offset
+            # draw a debug sphere centered
+            self.scene.draw_debug_arrow(pos=sensed_bottle_pos, vec=static_offset, radius=0.01, color=(1, 0, 0, 0.5))  # Green
+
         elif trial_id > 0 and self.check_saved_positions and self.adjusted_can_pos is not None:
             # check if the trial_id is in the adjusted_can_pos
             if trial_id in self.adjusted_can_pos:
