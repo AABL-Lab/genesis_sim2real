@@ -11,6 +11,7 @@ from genesis_sim2real.envs.kinova import JOINT_NAMES as kinova_joint_names, EEF_
 from matplotlib import pyplot as plt
 from geometry_msgs.msg import PoseStamped
 
+
 if DIGITAL_TWIN := False:
     import rospy
     import armpy
@@ -139,6 +140,7 @@ class GenesisGym(gymnasium.Env):
             rospy.sleep(1.0)
             rospy.Subscriber('/my_gen3_lite/base_feedback/joint_state', JointState, self.joint_state_callback)
             rospy.Subscriber('/can_detector/pose', PoseStamped, self.can_pose_callback)
+
 
     def joint_state_callback(self, msg):
         self.joint_state = msg
@@ -672,7 +674,7 @@ if __name__ == '__main__':
             steps += 1
             # print(action)
             next_obs, reward, done, *_ = env.step(action)
-            if args.vis: 
+            if args.vis:
                 img = next_obs['image']
                 cv2.imshow('image', img)
                 cv2.waitKey(1)
