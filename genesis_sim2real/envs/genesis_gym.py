@@ -70,7 +70,7 @@ class GenesisGym(gymnasium.Env):
             'friction': kwargs['friction'] if 'friction' in kwargs else DEFAULT_FRICTION,
             'vis': kwargs['vis'] if 'vis' in kwargs else False,
             'grayscale': kwargs['grayscale'] if 'grayscale' in kwargs else False,
-            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 2000, #4000,
+            'time_limit': kwargs['time_limit'] if 'time_limit' in kwargs else 1200,
             'env_name': kwargs['env_name'] if 'env_name' in kwargs else 'lift',
             # 'starting_x': args.starting_x if 'starting_x' in args else 0.65
             }
@@ -267,7 +267,7 @@ class GenesisGym(gymnasium.Env):
 
         if self.use_truncated_in_return:
             action = _unnormalize_action(action, self.action_space)
-        if self.total_steps % 1000 == 0:
+        if self.total_steps % 10000 == 0:
             print(f'gym sees action {action}', ', '.join(f"{a:+0.1f}" for a in action))
 
 
