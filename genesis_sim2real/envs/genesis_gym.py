@@ -12,7 +12,7 @@ from matplotlib import pyplot as plt
 from geometry_msgs.msg import PoseStamped
 
 
-if DIGITAL_TWIN := False:
+if DIGITAL_TWIN := True:
     import rospy
     import armpy
     from sensor_msgs.msg import JointState
@@ -132,11 +132,10 @@ class GenesisGym(gymnasium.Env):
 
         self.DIGITAL_TWIN = DIGITAL_TWIN
         self.angular_waypoints = [] 
-        self.can_position = None
+        self.can_position = None; self.joint_state = None; self.gripper_closed = False;
         if self.DIGITAL_TWIN:
             self.arm = armpy.initialize('gen3_lite')
-            self.joint_state = None; self.gripper_closed = False;
-            rospy.init_node("arm_reacher")
+            # rospy.init_node("arm_reacher", anonymous=True)
             rospy.sleep(1.0)
             rospy.Subscriber('/my_gen3_lite/base_feedback/joint_state', JointState, self.joint_state_callback)
             rospy.Subscriber('/can_detector/pose', PoseStamped, self.can_pose_callback)
@@ -196,11 +195,11 @@ class GenesisGym(gymnasium.Env):
         )
 
         self.rec_cam = scene.add_camera(
-            res    = (1280, 960),
-            pos    = (-0.5, -0.4, 0.2),
+            res    = (960, 640),
+            pos    = (-0.55, -0.35, 0.25),
             lookat = (1.0, 0, 0.0),
             fov    = 30,
-            GUI    = False
+            GUI    = True
         )
 
         # TODO: see if you can prevent the gripper from being convexified
@@ -209,7 +208,7 @@ class GenesisGym(gymnasium.Env):
                 file=str(pl.Path(__file__).parent / 'gen3_lite_2f_robotiq_85.urdf'),
                 fixed=True,
                 convexify=True,
-                pos=(0.0, 0.0, 0.055), # raise to account for table mount
+                pos=(0.0, 0.0, 0.045), # raise to account for table mount
             ),
             material=gs.materials.Rigid(friction=1.0),
             vis_mode="visual"
@@ -287,16 +286,22 @@ class GenesisGym(gymnasium.Env):
         self.n_steps += 1; self.total_steps += 1
 
         # self.angular_waypoints.append(action[:6])
-        gripper_toggle = (action[-1] > 50 and not self.gripper_closed) or (action[-1] < 50 and self.gripper_closed)
-        if self.DIGITAL_TWIN and self.n_steps % 5 == 0 or gripper_toggle:
-        # if self.DIGITAL_TWIN and len(self.angular_waypoints) > 200 or gripper_toggle:
-        # if False and self.DIGITAL_TWIN and self.n_steps % 3 == 0:
-            # self.arm.goto_joint_waypoints(self.angular_waypoints, radians=True, block=True); self.angular_waypoints = []
+        gripper_toggle = (action[-1] > 40 and not self.gripper_closed) or (action[-1] < 40 and self.gripper_closed)
+        # if self.DIGITAL_TWIN and (self.n_steps % 5 == 0 or gripper_toggle):
+        if self.DIGITAL_TWIN:
 
-            self.arm.goto_joint_pose(action[:6], radians=True, block=False)
+            self.arm.goto_joint_pose(action[:6], radians=True, block=True)
             if gripper_toggle:
-                if self.gripper_closed:  self.arm.open_gripper(); self.gripper_closed = False
-                else: self.arm.close_gripper(); self.gripper_closed = True
+                if self.gripper_closed:  
+                    for _ in range(3):
+                        self.arm.open_gripper()
+                        rospy.sleep(0.5)
+                    self.gripper_closed = False
+                else: 
+                    for _ in range(3):
+                        self.arm.close_gripper()
+                        rospy.sleep(0.5)
+                    self.gripper_closed = True
 
             # if not self.gripper_closed and action[-1] > 50:
             #     self.arm.close_gripper(); self.gripper_closed = True
@@ -338,7 +343,9 @@ class GenesisGym(gymnasium.Env):
         elif trial_id in TRIALS_POSITION_0: bottle_pos = POSITION_0
         elif trial_id in TRIALS_POSITION_1: bottle_pos = POSITION_1
         elif trial_id in TRIALS_POSITION_2: bottle_pos = POSITION_2
-        else: rand_idx = random.randint(0,2); bottle_pos = [POSITION_0, POSITION_1, POSITION_2][rand_idx]
+        else:
+            print(f"Trial {trial_id} not in adjusted can positions. Using random position.") 
+            rand_idx = random.randint(0,2); bottle_pos = [POSITION_0, POSITION_1, POSITION_2][rand_idx]
 
         # bottle_pos += random_offset
 
@@ -348,7 +355,7 @@ class GenesisGym(gymnasium.Env):
         self.kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), self.kdofs_idx)
 
         # run a few steps to stabilize the scene
-        for _ in range(10):
+        for _ in range(50):
             self.scene.step()
 
         obs = self.get_obs()
