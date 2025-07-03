@@ -8,6 +8,7 @@ import pathlib as pl
 import matplotlib.pyplot as plt
 import torch
 import gymnasium
+os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
 
 if __name__ == '__main__':
     import argparse
@@ -39,7 +40,7 @@ if __name__ == '__main__':
     from collections import defaultdict
     demonstrations = defaultdict(lambda: {'image': [], 'state': [], 'action': [], 'reward': [], 'next_state': [], 'next_image': [], 'done': []})
 
-    demo_player = GenesisDemoHolder(max_demos=args.max_demos, use_eef=use_eef, subsample_ratio=args.subsample)
+    demo_player = GenesisDemoHolder(max_demos=args.max_demos, use_eef=False, subsample_ratio=args.subsample)
     def get_action():
         if args.random_agent:
             return GenesisGym.action_space.sample()

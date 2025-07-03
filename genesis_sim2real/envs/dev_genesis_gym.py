@@ -95,7 +95,11 @@ class GenesisGym(gymnasium.Env):
         self.last_arm_dofs = None
 
         # initialize if we haven't already
-        gs.init(backend=gs.gpu, seed=random.randint(0, 2**30), precision="32", logging_level="warning")
+        if torch.cuda.is_available():
+
+            gs.init(backend=gs.gpu, seed=random.randint(0, 2**30), precision="32", logging_level="warning")
+        else:
+            gs.init(backend=gs.cpu, seed=random.randint(0, 2**30), precision="32", logging_level="warning")
         self.metadata = {
             "render_fps": 30
         }

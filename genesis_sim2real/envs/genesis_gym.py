@@ -94,7 +94,11 @@ class GenesisGym(gymnasium.Env):
         self.last_arm_dofs = None
 
         # initialize if we haven't already
-        gs.init(backend=gs.gpu, seed=random.randint(0, 2**30), precision="32", logging_level="warning")
+        if (torch.cuda.is_available()):
+            gs.init(backend=gs.gpu, seed=random.randint(0, 2**30), precision="32", logging_level="warning")
+        else:
+            gs.init(backend=gs.cpu, seed=random.randint(0, 2**30), precision="32", logging_level="warning")
+        
         self.metadata = {
             "render_fps": 30
         }
@@ -308,7 +312,7 @@ class GenesisGym(gymnasium.Env):
     def get_obs(self, is_first=False, picture_in_picture=True):
         # Get the current observation from the scene
         # image = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
-        image = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
+        image = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False)
         # from IPython import embed; embed(); exit(0)
         image = image[0] # grab the rgb
         # resize the image to the desired size
@@ -316,7 +320,7 @@ class GenesisGym(gymnasium.Env):
 
         if picture_in_picture:
             # grab the image from cam_0, shrink it, and put it in the corner of the main image
-            image2 = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
+            image2 = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False)[0]
             # image2 = cv2.resize(image2, (int(self.size[0] / 4), int(self.size[1] / 4)))
             # image[:int(self.size[0] / 4), :int(self.size[1] / 4)] = image2
             image = self.picture_in_picture(image2, image)
@@ -504,10 +508,10 @@ class GenesisGym(gymnasium.Env):
         # Render the scene
         img = None
         if mode == 'human':
-            img = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
+            img = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False)[0]
             img = cv2.resize(img, self.size)
 
-            img2 = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
+            img2 = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False)[0]
 
             img2 = self.picture_in_picture(img, img2)
 

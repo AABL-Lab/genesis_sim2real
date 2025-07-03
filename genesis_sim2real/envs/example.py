@@ -21,7 +21,7 @@ args = parser.parse_args()
 
 assert args.position in [-1, 0, 1, 2], "Position must be -1, 0, 1, or 2"
 
-gs.init(backend=gs.gpu, seed=0, precision="32", logging_level="warning")
+gs.init(backend=gs.cpu, seed=0, precision="32", logging_level="warning")
 
 
 scene = gs.Scene(

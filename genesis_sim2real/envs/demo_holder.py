@@ -115,15 +115,19 @@ class GenesisDemoHolder:
     Class to hold the demo data for the Genesis environment.
     """
     def __init__(self, max_demos=float('inf'), use_eef=False, subsample_ratio=1):
-        self.dir = pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials/')
-        # check if the directory exists
-        if not self.dir.exists():
-            self.dir = pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials/')
-
+        self.dir = pl.Path('/home/reu_2025/Genesis_Experiments/genesis_sim2real/inthewild_trials/') 
+        print(self.dir)
+        # if use_eef else pl.Path('/home/j/workspace/genesis_sim2real/inthewild_trials/')
+        # # check if the directory exists
+        # if not self.dir.exists():
+        #     print(self.dir)
+        #     self.dir = pl.Path('/home/reu/workspace/genesis_sim2real/inthewild_trials_eef/') if use_eef else pl.Path('/home/james/workspace/genesis_sim2real/inthewild_trials/')
+        #     print(self.dir)
+        
 
         self.paths = self.dir.glob('*episodes.npy')
         self.subsample_ratio = subsample_ratio
-        self.use_eef = use_eef
+        self.use_eef = False
 
         self.demos = []
         for idx, path in enumerate(self.paths):
