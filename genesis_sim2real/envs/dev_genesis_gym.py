@@ -332,6 +332,7 @@ class GenesisGym(gymnasium.Env):
         # Calculate the gripper force based on the gripper position
         pos = self.last_arm_dofs
         output_force = [0., 0.] #, 0., 0.]
+        print("cmd_gripper_pos", cmd_gripper_pos)
         motor_cmd = (100 - cmd_gripper_pos) / 100
         right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
         left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
