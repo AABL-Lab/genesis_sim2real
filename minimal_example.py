@@ -109,22 +109,28 @@ class GenesisGym():
 
         for i in range(50):
             self.scene.step()
-
+    
     def calc_gripper_force(self, cmd_gripper_pos, threshold=0.03):
-        # Calculate the gripper force based on the gripper position
         pos = self.last_arm_dofs
-        output_force = [0., 0.] #, 0., 0.]
-        motor_cmd = (100 - cmd_gripper_pos) / 100
-        right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
-        left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
-        right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > threshold else 0.0
-        left_fingertip_error = pos[-1] - KINOVA_START_DOFS_POS[-1]; left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > threshold else 0.0
+        output_force = [0., 0.]
 
-        print("Right error: ", right_error)
-        output_force[0] = -self.kp*right_error
-        output_force[1] = -self.kp*left_error
-        # print(output_force)
+        motor_cmd = (100 - cmd_gripper_pos) / 100
+        right_error = pos[-4] + motor_cmd
+        right_error = right_error if abs(right_error) > threshold else 0.0  # FIXED
+
+        left_error = pos[-3] - motor_cmd
+        left_error = left_error if abs(left_error) > threshold else 0.0  # FIXED
+
+        right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]
+        right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > threshold else 0.0
+
+        left_fingertip_error = pos[-1] - KINOVA_START_DOFS_POS[-1]
+        left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > threshold else 0.0
+
+        output_force[0] = -self.kp * right_error
+        output_force[1] = -self.kp * left_error
         return np.array(output_force)
+
     
     def apply_action(self, action, use_eef=True):
         if use_eef: # diff eef action
@@ -268,7 +274,58 @@ simulation.get_obs()
 # plt.show()
 
 # Move arm to clay
-print("Moving arm to clay")
-step_size = 0.1
-action = (step_size,  step_size,  step_size, 0.0)
+# print("Moving arm to clay")
+# step_size = 1
+# action = (step_size,  step_size,  step_size, 0.0)
+# simulation.step(action)
+
+# Set target position of the arm
+target_pos = np.array([0.5, 0.0, 0.30])  # slightly above the clay
+current_pos = simulation.eef.get_pos().cpu().numpy()
+delta_pos = target_pos - current_pos
+
+# Clip to action space limits
+delta_pos = np.clip(delta_pos, -0.025, 0.025)
+
+# No rotation for now
+delta_euler = np.zeros(3)
+
+# Gripper stay open
+gripper_pos = 0.0
+
+action = np.concatenate([delta_pos, delta_euler, [gripper_pos]])
 simulation.step(action)
+
+# action = np.concatenate([delta_pos, delta_euler, [gripper_pos]])
+# delta_pos: change in end-effector cartesian position in meteres (dx, dy, dz)
+# delta_euler: change in eef orientation as euler angles (droll, dpitch, dyaw) in radians
+# gripper pos: command to open or close the gripper (0-100)
+
+for _ in range(20):
+    current_pos = simulation.eef.get_pos().cpu().numpy()
+    delta_pos = np.array([0.5, 0.0, 0.30]) - current_pos
+    delta_pos = np.clip(delta_pos, -0.025, 0.025)  # step size
+
+    action = np.concatenate([delta_pos, np.zeros(3), [0.0]])
+    simulation.step(action)
+
+# Close gripper once positioned
+close_grip_action = np.concatenate([np.zeros(3), np.zeros(3), [100.0]])
+simulation.step(close_grip_action)
+
+# EEF positions -> Inverse Kinematics -> joint position
+# IK calculates joint angles based on desured eef pose
+
+# Move arm up and over the clay
+delta_euler = np.array([0.0, np.pi / 12, 0.0])  # ~15° pitch forward
+delta_pos = np.array([0.0, 0.0, +0.015])  # move up 1.5 cm
+
+gripper_pos = 0.0  # Keep gripper open for now
+action = np.concatenate([delta_pos, delta_euler, [gripper_pos]])
+simulation.step(action)
+
+for _ in range(5):  # or more for gradual motion
+    delta_pos = np.array([0.0, 0.0, 0.015])
+    delta_euler = np.array([0.0, np.pi / 48, 0.0])  # small pitch increment
+    action = np.concatenate([delta_pos, delta_euler, [0.0]])
+    simulation.step(action)
