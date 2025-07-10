@@ -34,12 +34,27 @@ class GenesisGym():
         dtype=np.float32
     )
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         ########################## init ##########################
         gs.init(backend=gs.cpu,
         logging_level = 'warning')
-    
+        self.args = {
+            'rho': kwargs.rho if hasattr(kwargs, 'rho') else DEFAULT_RHO,
+            'radius': kwargs.radius if hasattr(kwargs, 'radius') else DEFAULT_RADIUS,
+            'height': kwargs.height if hasattr(kwargs, 'height') else DEFAULT_HEIGHT,
+            'friction': kwargs.friction if hasattr(kwargs, 'friction') else DEFAULT_FRICTION,
+            'vis': kwargs.vis if hasattr(kwargs, 'vis') else False,
+            'grayscale': kwargs.grayscale if hasattr(kwargs, 'grayscale') else False,
+            'time_limit': kwargs.time_limit if hasattr(kwargs, 'time_limit') else 800,
+            'env_name': kwargs.env_name if hasattr(kwargs, 'env_name') else 'lift',
+            # 'starting_x': args.starting_x if hasattr(args, 'starting_x') else 0.65
+            }
+        
     def init_env(self):
+        BOTTLE_RADIUS = self.args['radius']
+        BOTTLE_HEIGHT = self.args['height']
+        BOX_WIDTH, BOX_HEIGHT = 0.75, 0.14
+
         self.kp = kp = 5
         ########################## create a scene ##########################
         self.scene = gs.Scene(
@@ -78,36 +93,20 @@ class GenesisGym():
                     # gs.morphs.MJCF(file="/home/j/workspace/genesis_pickaplace/005_tomato_soup_can/google_512k/kinbody.xml"),
                 )
 
-        # Use ElastoPlastic for clay sphere
-        # Temporily changing to rigid for 
-        self.obj_plastic = self.scene.add_entity(
-            material=gs.materials.MPM.ElastoPlastic(
-            ),
-            morph=gs.morphs.Sphere(
-                pos  = (0.5, 0, 0.25),
-                radius = 0.05,
-            ),
-            surface=gs.surfaces.Default(
-                color    = (0.4, 1.0, 0.4),
-                vis_mode = 'particle',
-                
-            ),
-        )
-        
-
-        self.platform_box = self.scene.add_entity(
-            material=gs.materials.Rigid(friction=2.0),  # give it some grip
-            morph=gs.morphs.Box(
-                pos=(0.5, 0.0, 0.20),        # slightly below your clay at z=0.25
-                size=(0.2, 0.2, 0.02),       # 20cm x 20cm, 2cm thick
+        self.obj_plastic = obj_plastic = self.scene.add_entity(
+            material=gs.materials.Rigid(rho=self.args['rho'],
+                                        friction=self.args['friction']),
+            # material=gs.materials.Rigid(rho=self.args.rho,
+            #                             friction=self.args.friction),
+            morph=gs.morphs.Cylinder(
+                pos=POSITION_0,
+                radius=BOTTLE_RADIUS,
+                height=BOTTLE_HEIGHT,
             ),
             surface=gs.surfaces.Default(
-                color=(0.7, 0.7, 0.7),
-                vis_mode="sdf",
+                color=(0.9, 0.3, 0.3, 1.0),
             ),
         )
-
-        #self.obj_plastic.set_friction(2.0)
 
         # Get kinova degrees of freedom
         self.kdofs_idx = [self.kinova.get_joint(name).dof_idx_local for name in kinova_joint_names]
@@ -176,12 +175,12 @@ class GenesisGym():
         # else:
         #     arm_pos, gripper_pos = action[:6], action[6:]
 
-        print("Gripper position:", gripper_pos)
+        #print("Gripper position:", gripper_pos)
         gripper_force = self.calc_gripper_force(gripper_pos)
 
         # Apply controls
         self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
-        print("Setting action")
+        #print("Setting action")
         self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
 
     def get_action(self, gripper_signal):
@@ -194,21 +193,29 @@ class GenesisGym():
         for i in range(10):
             self.scene.step()
     
-    def get_obs(self):
-        arm_pos = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
+    def _get_obs(self):
+        eef_pos = self.sim.eef.get_pos().cpu().numpy()
+        dofs = self.sim.kinova.get_dofs_position(dofs_idx_local=self.sim.kdofs_idx).cpu().numpy()
+        gripper_state = dofs[-2:].astype(np.float32)  # last 2 values for gripper finger positions
 
-        eef_pos = self.eef.get_pos().cpu().numpy()
-        eef_euler = gs.utils.geom.quat_to_xyz(self.eef.get_quat()).cpu().numpy()
-        finger_joint_pos = [arm_pos[-4]]
-        self.last_arm_dofs = arm_pos
+        return np.concatenate([eef_pos.astype(np.float32), gripper_state])
+
 
     def reset(self):
-        # run a few steps to stabilize the scene
-        for _ in range(10):
-            self.scene.step()
+        
         
         self.last_arm_dofs = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
+        print("Resetting object position")
+        self.obj_plastic.set_pos(POSITION_0); self.obj_plastic.set_quat(torch.Tensor([1, 0, 0, 0]))
+        self.target_eef_pos = self.eef.get_pos().cpu().numpy()
+        self.target_eef_euler = gs.utils.geom.quat_to_xyz(self.eef.get_quat()).cpu().numpy()
+        print("Resetting robot position")
+        self.kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), self.kdofs_idx)
 
+        # run a few steps to stabilize the scene
+        for _ in range(100):
+            self.scene.step()
+        
         self.target_eef_pos = self.eef.get_pos().cpu().numpy()
         self.target_eef_euler = gs.utils.geom.quat_to_xyz(self.eef.get_quat()).cpu().numpy()
 
@@ -263,118 +270,107 @@ class GenesisGym():
 
         return visible_z
 
-gripper_open_signal = 0
-gripper_close_signal = 100
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
 
-# Set up genesis environment
-simulation = GenesisGym()
-simulation.init_env()
-simulation.reset()
-simulation.get_obs()
+class GenesisGymWrapper(gym.Env):
+    def __init__(self):
+        super().__init__()
+        self.sim = GenesisGym()
+        self.sim.init_env()
+        self.sim.reset()
 
-# # Open the gripper
-# print("Opening the gripper")
-# action = simulation.get_action(gripper_open_signal)
-# simulation.step(action)
-# simulation.reset()
+        # Define observation and action spaces
+        # You can refine these later
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)  # EEF position
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)        # delta x,y,z
 
-# # Close the gripper
-# print("Closing the gripper?")
-# action = simulation.get_action(gripper_close_signal)
-# simulation.step(action)
-# simulation.reset()
+        # Target position
+        self.target_pos = self.sim.obj_plastic.get_pos().cpu().numpy()
 
-# # Get the clay depth
-# print("Getting clay depth")
-# depth = simulation.get_clay_depth()
-# visible_z = simulation.get_visible_top_particles()
-#print(visible_z)
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
 
-# plt.plot(visible_z)
-# plt.show()
+        # Fully reset the Genesis environment
+        self.sim.reset()
 
-# Move arm to clay
-# print("Moving arm to clay")
-# step_size = 1
-# action = (step_size,  step_size,  step_size, 0.0)
-# simulation.step(action)
+        # Reset internal target reference
+        self.target_pos = self.sim.obj_plastic.get_pos().cpu().numpy()
 
-# Set target position of the arm
-target_pos = np.array([0.5, 0.0, 0.30])  # slightly above the clay
-current_pos = simulation.eef.get_pos().cpu().numpy()
-delta_pos = target_pos - current_pos
-
-# Clip to action space limits
-delta_pos = np.clip(delta_pos, -0.025, 0.025)
-
-# No rotation for now
-delta_euler = np.zeros(3)
-
-# Gripper stay open
-gripper_pos = 0.0
-
-action = np.concatenate([delta_pos, delta_euler, [gripper_pos]])
-simulation.step(action)
-
-# action = np.concatenate([delta_pos, delta_euler, [gripper_pos]])
-# delta_pos: change in end-effector cartesian position in meteres (dx, dy, dz)
-# delta_euler: change in eef orientation as euler angles (droll, dpitch, dyaw) in radians
-# gripper pos: command to open or close the gripper (0-100)
-
-for _ in range(20):
-    current_pos = simulation.eef.get_pos().cpu().numpy()
-    delta_pos = np.array([0.5, 0.0, 0.30]) - current_pos
-    delta_pos = np.clip(delta_pos, -0.025, 0.025)  # step size
-
-    action = np.concatenate([delta_pos, np.zeros(3), [0.0]])
-    simulation.step(action)
-
-# Close gripper once positioned
-close_grip_action = np.concatenate([np.zeros(3), np.zeros(3), [100.0]])
-simulation.step(close_grip_action)
-
-# EEF positions -> Inverse Kinematics -> joint position
-# IK calculates joint angles based on desured eef pose
-
-# Move arm up and over the clay
-delta_euler = np.array([0.0, np.pi / 12, 0.0])  # ~15° pitch forward
-delta_pos = np.array([0.0, 0.0, +0.015])  # move up 1.5 cm
-
-gripper_pos = 0.0  # Keep gripper open for now
-action = np.concatenate([delta_pos, delta_euler, [gripper_pos]])
-simulation.step(action)
-
-# for _ in range(5):  # or more for gradual motion
-#     delta_pos = np.array([0.0, 0.0, 0.015])
-#     delta_euler = np.array([0.0, np.pi / 48, 0.0])  # small pitch increment
-#     action = np.concatenate([delta_pos, delta_euler, [0.0]])
-#     simulation.step(action)
-
-# Set pitch to π radians → gripper points down
-# target_euler = np.array([0.0, np.pi, 0.0])
-# target_quat = gs.utils.geom.xyz_to_quat(torch.tensor(target_euler))
-
-# # Keep current EEF position, only change orientation
-# current_pos = simulation.eef.get_pos().cpu().numpy()
-
-# ik_joints = simulation.kinova.inverse_kinematics(
-#     simulation.eef,
-#     pos=current_pos,
-#     quat=target_quat,
-#     rot_mask=[True, True, True]
-# )
-
-# arm_pos = ik_joints[:-4]  # exclude gripper joints
-# simulation.kinova.control_dofs_position(arm_pos, dofs_idx_local=simulation.kdofs_idx[:len(arm_pos)])
-
-# # Step the scene
-# for _ in range(10):
-#     simulation.scene.step()
-
-############## RL model ################
-# Observation: EEF Position
-# Action: Delta movement
-# Reward: Negative distance to target
-# Policy: Move tward clay
+        # Get initial observation
+        obs = self._get_obs()
+        return obs, {}
 
 
+    def step(self, action):
+        #print("New trial running")
+        action = np.clip(action, -1.0, 1.0)
+        delta = action[:3] * 0.02  # (dx, dy, dz)
+        gripper_control = action[3]  # [-1, +1]
+
+        # Scale gripper value from [-1,1] → [0, 100]
+        gripper_pos = np.interp(gripper_control, [-1.0, 1.0], [0, 100])
+
+        # Full action = [dx, dy, dz, rx, ry, rz, gripper]
+        full_action = np.concatenate([delta, [0, 0, 0], [gripper_pos]])
+        self.sim.step(full_action)
+
+        obs = self._get_obs()
+        reward = self._compute_reward(obs, gripper_pos)
+        terminated = reward > 0.5  # Change this as needed
+        truncated = False
+
+        return obs, reward, terminated, truncated, {}
+
+
+    def _get_obs(self):
+        eef_pos = self.sim.eef.get_pos().cpu().numpy()
+        return eef_pos.astype(np.float32)
+
+    def _compute_reward(self, eef_pos, gripper_pos):
+        clay_pos = self.sim.obj_plastic.get_pos().cpu().numpy()
+        dist = np.linalg.norm(eef_pos - clay_pos)
+
+        # Encourage closeness to the object
+        reward = -dist
+
+        # BONUS: reward lifting the clay above a threshold
+        if clay_pos[2] > 0.3:  # original Z ~0.25
+            reward += 1.0
+
+        # BONUS: encourage gripper closing when near the object
+        if dist < 0.05 and gripper_pos > 80:
+            reward += 0.5
+
+        print("Reward for trial", reward)
+        return reward
+
+
+    def render(self):
+        pass  # viewer is already shown in Genesis
+
+    def close(self):
+        pass
+
+
+
+from stable_baselines3 import PPO
+
+# create an instance of the genesis environment
+# create a PPO model from stable_baselines3
+env = GenesisGymWrapper()
+model = PPO("MlpPolicy", env, verbose=1)
+model.learn(total_timesteps=1000, progress_bar=True)
+model.save("PPO_model")
+
+model = PPO.load("PPO_model", env=env)
+mean_reward, std_reward = evaluate_policy(model, model.get_env(), n_eval_episodes=10)
+
+vec_env = model.get_env()
+obs = vec_env.reset()
+
+for i in range(1000):
+    action, _states = model.predict(obs, deterministc=True)
+    obs, rewards, dones, info = vec_env.step(action)
+    vc_env.render("human")
