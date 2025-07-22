@@ -128,6 +128,7 @@ class GenesisGym(gym.Env):
         # # Get kinova degrees of freedom
         self.kdofs_idx = [self.kinova.get_joint(name).dof_idx_local for name in kinova_joint_names]
         self.eef = self.kinova.get_link(kinova_eef_name)
+        
         print(f"Kinova end effector: {self.eef}")
 
         ########################## build ##########################
@@ -144,7 +145,7 @@ class GenesisGym(gym.Env):
         #     dofs_idx_local = self.kdofs_idx,
         # )
         # self.kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), self.kdofs_idx)
-
+        self.target_eef_euler = gs.utils.geom.quat_to_xyz(self.eef.get_quat()).cpu().numpy()
         for i in range(100):
             self.scene.step()
 
@@ -258,7 +259,46 @@ class GenesisGym(gym.Env):
 
         # Apply joint commands to robot arm
         self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
-        
+    
+    def apply_action(self, action, use_eef=True):
+        if use_eef: # diff eef action
+            # Apply relative changes to current position and orientation
+            # print(', '.join([f"{x:+.5f}" for x in action]))
+            delta_pos, delta_euler, gripper_pos = action[:3], action[3:6], action[-1]
+            # delta_pos, delta_yaw, gripper_pos = action[:3], action[5], action[-1:]
+            
+            # Update the current position and euler angle
+            current_pos = self.eef.get_pos().cpu().numpy()
+            current_quat = self.eef.get_quat().cpu().numpy()
+
+            self.target_eef_pos = current_pos
+            self.target_eef_euler = gs.utils.geom.quat_to_xyz(current_quat)
+
+            self.target_eef_euler = self.target_eef_euler + delta_euler
+            # self.target_eef_euler = self.target_eef_euler + np.array([0, 0, delta_yaw])
+            self.target_eef_pos = self.target_eef_pos + delta_pos
+
+            target_quat = gs.utils.geom.xyz_to_quat(self.target_eef_euler)
+            
+            # Use IK to get joint angles
+            ik_joints = self.kinova.inverse_kinematics(
+                self.eef, 
+                pos=self.target_eef_pos, 
+                quat=target_quat, 
+                rot_mask=[True, True, True]
+            )
+            arm_pos = ik_joints[:-4]
+        # else:
+        #     arm_pos, gripper_pos = action[:6], action[6:]
+
+        #print("Gripper position:", gripper_pos)
+        gripper_force = self.calc_gripper_force(gripper_pos)
+
+        # Apply controls
+        self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
+        #print("Setting action")
+        self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
+    
     def get_action(self, gripper_signal):
         print("Getting gripper open signal")
         return (0.0, 0.0, 0.0, gripper_open_signal)
@@ -278,26 +318,21 @@ class GenesisGym(gym.Env):
         self.last_arm_dofs = arm_pos
 
     def reset(self):
-        self.last_arm_dofs = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
-        print("Resetting object position")
-        #f = self.obj_plastic.get_frame()
-        n = self.obj_plastic._n_particles
-        positions = gs.morphs.Sphere(
-            pos=POSITION_0,
-            radius=CLAY_RADIUS,
-        )
-        #self.obj_plastic.set_pos(0, positions)#; #self.obj_plastic.set_quat(torch.Tensor([1, 0, 0, 0]))
-        # self.target_eef_pos = self.eef.get_pos().cpu().numpy()
-        # self.target_eef_euler = gs.utils.geom.quat_to_xyz(self.eef.get_quat()).cpu().numpy()
-        # print("Resetting robot position")
-        # self.kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), self.kdofs_idx)
+        self.scene.reset()
+
+        default_pose = [0.5, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0]
+
+        print("Goint to pose:", default_pose)
+        simulation.apply_target_action(default_pose)
+        # simulation.kinova.control_dofs_position(arm_pos, dofs_idx_local=simulation.kdofs_idx[:len(arm_pos)])
+        action = []
+        # Step the scene
+        for _ in range(100):
+            simulation.scene.step()
 
         # run a few steps to stabilize the scene
         for _ in range(100):
             self.scene.step()
-        
-        self.target_eef_pos = self.eef.get_pos().cpu().numpy()
-        self.target_eef_euler = gs.utils.geom.quat_to_xyz(self.eef.get_quat()).cpu().numpy()
        
     def get_clay_depth(self):
         # Fetch the current scene state
@@ -361,13 +396,6 @@ simulation.init_env()
 #simulation.reset()
 simulation.get_obs()
 
-### Quat to Euler ###
-# target_euler = np.array([np.pi, 0.0, 0.0])
-# print("target_euler", target_euler)
-# target_quat = gs.utils.geom.xyz_to_quat(target_euler)
-# print("target_quat", target_quat)
-
-
 default_pose = [0.5, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0]
 
 print("Goint to pose:", default_pose)
@@ -377,189 +405,26 @@ action = []
 # Step the scene
 for _ in range(100):
     simulation.scene.step()
-#simulation.get_obs()
 
-
-# The identity quaternion is [0, 0, 0, 1]
-simulation.apply_delta_action([0.05, 0.0, 0.0])
-for _ in range(100):
-    simulation.scene.step()
-
-simulation.apply_delta_action([0.0, 0.0, -0.2])
-for _ in range(100):
-    simulation.scene.step()
-
-simulation.apply_delta_action([0.0, 0.0, 0.2])
-for _ in range(100):
-    simulation.scene.step()
-
-simulation.apply_delta_action([0.0, 0.0, -0.2])
-for _ in range(100):
-    simulation.scene.step()
-
-simulation.apply_delta_action([0.0, 0.0, 0.2])
-for _ in range(100):
-    simulation.scene.step()
-print("done")
-# simulation.apply_delta_action([0.0, 0.0, -0.2, 0.0, 0.0, 0.0, 0.0])
-# for _ in range(200):
-#     simulation.scene.step()
-
-# simulation.apply_action([0.5, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0])
-# for _ in range(100):
-#     simulation.scene.step()
-
-# simulation.apply_action([0.5, 0.0, 0.4, 0.0, 1.0, 0.0, 0.0])
-# for _ in range(100):
-#     simulation.scene.step()
-
-# simulation.apply_action([0.5, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0])
-# for _ in range(100):
-#     simulation.scene.step()
-
-# simulation.apply_action([0.5, 0.0, 0.4, 0.0, 1.0, 0.0, 0.0])
-# for _ in range(100):
-############# Test resetting the environment for each trial ############
-
-#simulation.reset()
-
-# #arm_pos = ik_joints[:-4]  # exclude gripper joints
-# print("moving to default_pose:", default_pose)
-# # default_pose = [0, 0, 0.5, 0.5, 1, 0.0, 0.0]
-# simulation.apply_action(default_pose)
-# # simulation.kinova.control_dofs_position(arm_pos, dofs_idx_local=simulation.kdofs_idx[:len(arm_pos)])
-# action = []
-# # Step the scene
-# for _ in range(200):
-#     simulation.scene.step()
-
-# default_pose = [0.5, 0.0, 0.3, 1, 1, 1, 1]
-
-# #arm_pos = ik_joints[:-4]  # exclude gripper joints
-# print("moving to default_pose:", default_pose)
-# # default_pose = [0, 0, 0.5, 0.5, 1, 0.0, 0.0]
-# simulation.apply_action(default_pose)
-# # simulation.kinova.control_dofs_position(arm_pos, dofs_idx_local=simulation.kdofs_idx[:len(arm_pos)])
-# action = []
-# # Step the scene
-# for _ in range(200):
-#     simulation.scene.step()
-
-############# Code allows the gripper to open and close #################
-# print("moving to open gripper position")
-# # half_open_action = simulation.calc_gripper_force(gripper_half_open_signal)
-# # print("half_open action", half_open_action)
-# default_pose = [0.5, 0.0, 0.5, 0.0, 1, 0.0, 0.0, 100]
-# simulation.apply_action(default_pose)
-
-# for _ in range(200):
-#     simulation.scene.step()
-
-# print("moving to closed gripper position")
-# # half_open_action = simulation.calc_gripper_force(gripper_half_open_signal)
-# # print("half_open action", half_open_action)
-# default_pose = [0.5, 0.0, 0.5, 0.0, 1, 0.0, 0.0, -100]
-# simulation.apply_action(default_pose)
-
-# for _ in range(200):
-#     simulation.scene.step()
-
-# print("moving to half open gripper position")
-# default_pose = [0.5, 0.0, 0.5, 0.0, 1, 0.0, 0.0, 10]
-# # apply a small force to open the gripper and then stop it by sending 0
-# simulation.apply_action(default_pose)
-
-# for _ in range(200):
-#     simulation.scene.step()
-# default_pose = [0.5, 0.0, 0.5, 0.0, 1, 0.0, 0.0, 0]
-# simulation.apply_action(default_pose)
-
-# for _ in range(200):
-#     simulation.scene.step()
-############## RL model ################
-# Observation: EEF Position
-# Action: Delta movement
-# Reward: Negative distance to target
-# Policy: Move tward clay
-
-
-########## Nonsense code idk what im doing ##############
-
-# action = np.concatenate([delta_pos, delta_euler, [gripper_pos]])
-# delta_pos: change in end-effector cartesian position in meteres (dx, dy, dz)
-# delta_euler: change in eef orientation as euler angles (droll, dpitch, dyaw) in radians
-# gripper pos: command to open or close the gripper (0-100)
-
-# for _ in range(20):
-#     current_pos = simulation.eef.get_pos().cpu().numpy()
-#     delta_pos = np.array([0.5, 0.0, 0.30]) - current_pos
-#     delta_pos = np.clip(delta_pos, -0.025, 0.025)  # step size
-
-#     action = np.concatenate([delta_pos, np.zeros(3), [0.0]])
-#     simulation.step(action)
-
-# # Close gripper once positioned
-# close_grip_action = np.concatenate([np.zeros(3), np.zeros(3), [100.0]])
-# simulation.step(close_grip_action)
-
-# # EEF positions -> Inverse Kinematics -> joint position
-# # IK calculates joint angles based on desured eef pose
-
-# # Move arm up and over the clay
-# delta_euler = np.array([0.0, np.pi / 12, 0.0])  # ~15° pitch forward
-# delta_pos = np.array([0.0, 0.0, +0.015])  # move up 1.5 cm
-
-# gripper_pos = 0.0  # Keep gripper open for now
-# action = np.concatenate([delta_pos, delta_euler, [gripper_pos]])
-# simulation.step(action)
-
-# for _ in range(5):  # or more for gradual motion
-#     delta_pos = np.array([0.0, 0.0, 0.015])
-#     delta_euler = np.array([0.0, np.pi / 48, 0.0])  # small pitch increment
-#     action = np.concatenate([delta_pos, delta_euler, [0.0]])
-#     simulation.step(action)
-
-# # Set pitch to π radians → gripper points down
-# target_euler = np.array([0.0, np.pi, 0.0])
+### Quat to Euler ###
+# target_euler = np.array([np.pi, 0.0, 0.0])
 # print("target_euler", target_euler)
-# target_quat = gs.utils.geom.xyz_to_quat(torch.tensor(target_euler))
+# target_quat = gs.utils.geom.xyz_to_quat(target_euler)
 # print("target_quat", target_quat)
-# # Keep current EEF position, only print("moving to open gripper position")
-# # half_open_action = simulation.calc_gripper_force(gripper_half_open_signal)
-# # print("half_open action", half_open_action)
-# simulation.apply_action((0, 0, 0, 100))
 
-# for _ in range(200):
-#     simulation.scene.step()
+# reset scene first
+print("Poke the clay")
+simulation.apply_action([0.0, 0.0, -0.1, 0.0, 0.0, 0.0, 0.0])
+for _ in range(100):
+    simulation.scene.step()
 
-# print("moving to closed gripper position")
-# # half_open_action = simulation.calc_gripper_force(gripper_half_open_signal)
-# # print("half_open action", half_open_action)
-# simulation.apply_action((0, 0, 0, -100))
+simulation.apply_action([0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.0])
+for _ in range(100):
+    simulation.scene.step()
 
-# for _ in range(200):
-#     simulation.scene.step()
-
-# print("moving to half open gripper position")
-# # apply a small force to open the gripper and then stop it by sending 0
-# simulation.apply_action((0, 0, 0, 10))
-
-# for _ in range(200):
-#     simulation.scene.step()
-
-# simulation.apply_action((0, 0, 0, 0))
-
-# for _ in range(200):
-#     simulation.scene.step()change orientation
-# current_pos = simulation.eef.get_pos().cpu().numpy()
-# print("current position", current_pos)
-# print("Calculating eef position")
-# ik_joints = simulation.kinova.inverse_kinematics(
-#     simulation.eef,
-#     pos=current_pos,
-#     quat=target_quat,
-#     rot_mask=[True, True, True]
-# )
+print("Resetting the simulation")
+simulation.reset()
+#simulation.get_obs()
 
 
 
