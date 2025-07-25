@@ -51,8 +51,7 @@ if __name__ == '__main__':
                 print(f"!!NaN action!! {ret=} at index {demo_player.action_idx-1}")
 
             return ret
-    trial_id = demo_player.get_trial_id()
-
+    trial_id = demo_player.get_trial_id(); demo_resets = 0
     TRIAL_CAN_ADJUSTED = defaultdict(lambda: False)
     ADJUSTED_CAN_POS = {}
 
@@ -73,31 +72,39 @@ if __name__ == '__main__':
             # close off the last demo
             demonstrations[trial_id]['done'][-1] = True
 
-            trial_id = demo_player.next_demo()
+            if reward < 9.99 and demo_resets < 5:
+                print(f"Reset demo {trial_id} due to low reward {reward}")
+                demo_player.reset_current_demo()
+                demo_resets += 1
+            else:
+                demo_resets = 0
+                trial_id = demo_player.next_demo()
 
-            # reset the env
-            if reward > 0: successful_trials += 1
-            if bottleZ > 0.15: pickups += 1
-            if trial_id == -1:
-                print("No more demos")
-                break
-            # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
-            trials += 1; steps = 0; done = False
+                # reset the env
+                if reward > 0: successful_trials += 1
+                if bottleZ > 0.15: pickups += 1
+                if trial_id == -1:
+                    print("No more demos")
+                    break
+                
 
-            # write out the video if it was successful:
-            if reward > 0:
-                # make the new directory if it doesn't exist
-                vid_dir = f'./videos_ss{args.subsample}'
-                pl.Path(vid_dir).mkdir(parents=True, exist_ok=True)
-                video_frames = np.array(video_frames)
-                video_path = f'{vid_dir}/{trial_id}_video.mp4'
-                out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 30, (video_frames.shape[2], video_frames.shape[1]))
-                for frame in video_frames:
-                    out.write(frame)
-                out.release()
-                print(f"Video saved to {video_path}")
+                # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
+                trials += 1
 
-            video_frames= []
+                # write out the video if it was successful:
+                if reward > 0:
+                    # make the new directory if it doesn't exist
+                    vid_dir = f'./videos_ss{args.subsample}'
+                    pl.Path(vid_dir).mkdir(parents=True, exist_ok=True)
+                    video_frames = np.array(video_frames)
+                    video_path = f'{vid_dir}/{trial_id}_video.mp4'
+                    out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 30, (video_frames.shape[2], video_frames.shape[1]))
+                    for frame in video_frames:
+                        out.write(frame)
+                    out.release()
+                    print(f"Video saved to {video_path}")
+
+            video_frames= []; steps = 0; done = False
 
             # write out a histogram of the dp
             # plt.hist(env.dp, bins=50, range=(0, 0.2), alpha=0.5)
@@ -119,9 +126,12 @@ if __name__ == '__main__':
 
             # if the gripper action is closing and the can is nearby, move the can and restart the demo
             gripper_pos = env.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
+            left_fingertip = env.kinova.get_link('left_finger_dist_link')
+            right_fingertip = env.kinova.get_link('right_finger_dist_link')
             can_pose = env.bottle.get_pos().cpu().numpy()
-            dp = np.linalg.norm(gripper_pos - can_pose)
-            if action[-1] > 50 and dp < 0.2 and not TRIAL_CAN_ADJUSTED[trial_id] and gripper_pos[2] < 0.5:
+            dp_left = np.linalg.norm(gripper_pos - left_fingertip.get_pos().cpu().numpy())
+            dp_right = np.linalg.norm(gripper_pos - right_fingertip.get_pos().cpu().numpy())
+            if action[-1] > 50 and dp_left < 0.9 and dp_right < 0.9 and not TRIAL_CAN_ADJUSTED[trial_id] and gripper_pos[2] < 0.1:
                 # get the average pos of the last 4 links 
                 grip_pos = env.get_grip_pose()
                 grip_pos[-1] = PZ
