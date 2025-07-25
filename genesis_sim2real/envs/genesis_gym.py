@@ -214,7 +214,9 @@ class GenesisGym(gymnasium.Env):
 
 
         self.kdofs_idx = kdofs_idx = [kinova.get_joint(name).dof_idx_local for name in kinova_joint_names]
-        scene.build()
+        
+        B = self.B = 32
+        scene.build(n_envs=B, env_spacing=(1.0, 1.0))
 
         ############ Optional: set control gains ############
         # set positional gains
@@ -222,7 +224,12 @@ class GenesisGym(gymnasium.Env):
             kp             = self.kp*np.array([100, 100, 100, 100, 100, 100, 100, 100, 100, 100]),
             dofs_idx_local = kdofs_idx,
         )
-        kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), kdofs_idx)
+        
+        # repeat the dofs position across all environments
+        dofs_pos = np.repeat(np.array(KINOVA_START_DOFS_POS).reshape(1, -1), B, axis=0)
+        # dofs_pos = np.stack(KINOVA_START_DOFS_POS, B, axis=0)
+        print(f'{dofs_pos.shape=}')
+        kinova.set_dofs_position(dofs_pos, kdofs_idx)
 
         # Wrist position
         self.eef_link = self.kinova.get_link(kinova_eef_name)
@@ -283,7 +290,9 @@ class GenesisGym(gymnasium.Env):
         self.bottle.set_pos(bottle_pos); self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
         self.goal_bottle.set_pos(STATIC_BOTTLE_POSITION); self.goal_bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
         self.box.set_pos(self.box_pos); self.box.set_quat(torch.Tensor([1, 0, 0, 0]))
-        self.kinova.set_dofs_position(np.array(KINOVA_START_DOFS_POS), self.kdofs_idx)
+
+        dofs_pos = np.repeat(np.array(KINOVA_START_DOFS_POS).reshape(1, -1), B, axis=0)
+        self.kinova.set_dofs_position(dofs_pos, self.kdofs_idx)
 
         # run a few steps to stabilize the scene
         for _ in range(10):
@@ -408,8 +417,11 @@ class GenesisGym(gymnasium.Env):
         self.dp.append(dp)
 
         # self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:]))
-        self.kinova.control_dofs_force(gripper_force, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
-        self.kinova.control_dofs_position(arm_pos, dofs_idx_local=self.kdofs_idx[:len(arm_pos)])
+
+        gripper_forces = np.repeat(gripper_force.reshape(1, -1), self.B, axis=0)
+        arm_poss = np.repeat(arm_pos.reshape(1, -1), self.B, axis=0)
+        self.kinova.control_dofs_force(gripper_forces, dofs_idx_local=np.array(self.kdofs_idx[-4:-2]))
+        self.kinova.control_dofs_position(arm_poss, dofs_idx_local=self.kdofs_idx[:len(arm_poss[0])])
 
     def compute_reward(self, vstate):
         reward = 0.
@@ -488,7 +500,9 @@ class GenesisGym(gymnasium.Env):
         # self.scene.draw_debug_sphere(middle, 0.01, color=(1, 0, 0))
         # self.scene.draw_debug_sphere(position, 0.01, color=(0, 1, 0))
 
+        # self.cam_0.set_pose(pos=np.repeat(position.cpu().numpy().reshape(1, -1), self.B, axis=0), lookat=np.repeat(middle.cpu().numpy().reshape(1, -1), self.B, axis=0), up=(0, 0, 1))
         self.cam_0.set_pose(pos=position.cpu().numpy(), lookat=middle.cpu().numpy(), up=(0, 0, 1))
+        
 
     def get_grip_pose(self):
         # get the average position of the fingertips
