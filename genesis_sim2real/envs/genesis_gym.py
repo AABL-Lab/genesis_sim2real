@@ -77,7 +77,8 @@ class GenesisGym(gymnasium.Env):
         if not stable_baselines:
             self.observation_space = spaces.Dict({
                 "image": spaces.Box(low=0, high=255, shape=(*size, 3 if not self.args['grayscale'] else 1), dtype=np.uint8),
-                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
+                # "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # eef pos, angles, vel, and angvel and gripper state as well as can location
+                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(6 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location
                 'reward': spaces.Box(low=-np.inf, high=np.inf, shape=(), dtype=np.float32),
                 'is_first': spaces.Box(low=0, high=1, shape=(), dtype=bool),
                 'is_last': spaces.Box(low=0, high=1, shape=(), dtype=bool),
@@ -86,7 +87,8 @@ class GenesisGym(gymnasium.Env):
         else:
             self.observation_space = spaces.Dict({
                 "image": spaces.Box(low=0, high=255, shape=(*size, 3 if not self.args['grayscale'] else 1), dtype=np.uint8),
-                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location and differential to goal
+                # "state": spaces.Box(low=-np.inf, high=np.inf, shape=(3 + 3 + 3 + 3 + 3 + 1,), dtype=np.float32), # eef pos, angles, vel, and angvel and gripper state as well as can location
+                "state": spaces.Box(low=-np.inf, high=np.inf, shape=(6 + 3 + 1,), dtype=np.float32), # joint angles and gripper state as well as can location
             })
 
         self.last_arm_dofs = None
@@ -334,11 +336,11 @@ class GenesisGym(gymnasium.Env):
         eef_lin_vel = self.eef_link.get_vel().cpu().numpy() # linear velocity
         eef_ang_vel = self.eef_link.get_ang().cpu().numpy() # angular velocity
         bottle_pos = self.bottle.get_pos().cpu().numpy()
-        # state = np.concatenate((arm_pos, bottle_pos))
-
         finger_joint_pos = [arm_pos[-4]]
-
-        state = np.concatenate((eef_pos, eef_euler, eef_lin_vel, eef_ang_vel, bottle_pos, finger_joint_pos))
+        # state = np.concatenate((eef_pos, eef_euler, eef_lin_vel, eef_ang_vel, bottle_pos, finger_joint_pos))
+        
+        arm_no_gripper_pos = arm_pos[:-4]
+        state = np.concatenate((arm_no_gripper_pos, bottle_pos, finger_joint_pos))
 
         self.last_arm_dofs = arm_pos
 
