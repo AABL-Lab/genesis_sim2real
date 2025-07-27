@@ -31,7 +31,7 @@ if __name__ == '__main__':
     env = GenesisGym(**args.__dict__)
     obs = env.reset()
 
-    done = False
+    done = np.array([False] * env.B, dtype=bool)  # Initialize done for all environments
     max_reward = float('-inf'); reward = 0
     trials = 1; successful_trials = 0; steps = 0; pickups = 0
 
@@ -39,7 +39,7 @@ if __name__ == '__main__':
     from collections import defaultdict
     demonstrations = defaultdict(lambda: {'image': [], 'state': [], 'action': [], 'reward': [], 'next_state': [], 'next_image': [], 'done': []})
 
-    demo_player = GenesisDemoHolder(max_demos=args.max_demos, use_eef=use_eef, subsample_ratio=args.subsample)
+    demo_player = GenesisDemoHolder(max_demos=args.max_demos, use_eef=False, subsample_ratio=args.subsample)
     def get_action():
         if args.random_agent:
             return GenesisGym.action_space.sample()
@@ -63,16 +63,17 @@ if __name__ == '__main__':
         # action = diff_eef_demo[action_idx]
         # action_idx += 1
 
-        if action is None or steps > env._max_episode_steps() or done:
+        # NOTE: Stopping under these conditions will let episodes go from done to not done, but it's still good to get the success rate at the end of the episode
+        if action is None or steps > env._max_episode_steps() or done.all():
         # if action_idx >= len(diff_eef_demo) or done or steps > env._max_episode_steps():
             bottleZ = env.bottle.get_pos().cpu().numpy()[2]
             print(f"\t Max Reward {max_reward:+1.2f}. {bottleZ=}")
             max_reward = float('-inf')
 
             # close off the last demo
-            demonstrations[trial_id]['done'][-1] = True
+            # demonstrations[trial_id]['done'][-1] = True
 
-            if reward < 9.99 and demo_resets < 5:
+            if False and reward < 9.99 and demo_resets < 5:
                 print(f"Reset demo {trial_id} due to low reward {reward}")
                 demo_player.reset_current_demo()
                 demo_resets += 1
@@ -81,90 +82,91 @@ if __name__ == '__main__':
                 trial_id = demo_player.next_demo()
 
                 # reset the env
-                if reward > 0: successful_trials += 1
-                if bottleZ > 0.15: pickups += 1
-                if trial_id == -1:
-                    print("No more demos")
-                    break
+                # if reward > 0: successful_trials += 1
+                # if bottleZ > 0.15: pickups += 1
+                # if trial_id == -1:
+                #     print("No more demos")
+                #     break
+
+                successful_trials += sum(done)
                 
+                print(f"Trial {trial_id} done. Successful trials: {sum(done).item()} of {len(done)}. {sum(done).item()/len(done):.2%} success rate")
 
                 # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
                 trials += 1
 
                 # write out the video if it was successful:
-                if reward > 0:
-                    # make the new directory if it doesn't exist
-                    vid_dir = f'./videos_ss{args.subsample}'
-                    pl.Path(vid_dir).mkdir(parents=True, exist_ok=True)
-                    video_frames = np.array(video_frames)
-                    video_path = f'{vid_dir}/{trial_id}_video.mp4'
-                    out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 30, (video_frames.shape[2], video_frames.shape[1]))
-                    for frame in video_frames:
-                        out.write(frame)
-                    out.release()
-                    print(f"Video saved to {video_path}")
+            #     if reward > 0:
+            #         # make the new directory if it doesn't exist
+            #         vid_dir = f'./videos_ss{args.subsample}'
+            #         pl.Path(vid_dir).mkdir(parents=True, exist_ok=True)
+            #         video_frames = np.array(video_frames)
+            #         video_path = f'{vid_dir}/{trial_id}_video.mp4'
+            #         out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), 30, (video_frames.shape[2], video_frames.shape[1]))
+            #         for frame in video_frames:
+            #             out.write(frame)
+            #         out.release()
+            #         print(f"Video saved to {video_path}")
 
-            video_frames= []; steps = 0; done = False
+            video_frames= []; steps = 0;     
+            done = np.array([False] * env.B, dtype=bool)  # Initialize done for all environments
 
-            # write out a histogram of the dp
-            # plt.hist(env.dp, bins=50, range=(0, 0.2), alpha=0.5)
-            # plt.title(f"Demo {trial_id} DP Histogram")
-            # plt.xlabel('DP')
-            # plt.ylabel('Frequency')
-            # plt.savefig(f'results/{trial_id}_ss{SUBSAMPLE_RATIO}_dp_histogram.png')
 
             env.reset(trial_id=trial_id)
         else:
             steps += 1
             # print(action)
             next_obs, reward, done, *_ = env.step(action)
-            if args.vis: env.render(use_imshow=True)
-            if reward > max_reward:
-                max_reward = reward
 
-            video_frames.append(obs['image'])
+            # if args.vis: env.render(use_imshow=True)
+            if False:
+### FOR NOW JUST PRINT OUT SUCCESS STATS ###
+                if reward > max_reward:
+                    max_reward = reward
 
-            # if the gripper action is closing and the can is nearby, move the can and restart the demo
-            gripper_pos = env.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
-            left_fingertip = env.kinova.get_link('left_finger_dist_link')
-            right_fingertip = env.kinova.get_link('right_finger_dist_link')
-            can_pose = env.bottle.get_pos().cpu().numpy()
-            dp_left = np.linalg.norm(gripper_pos - left_fingertip.get_pos().cpu().numpy())
-            dp_right = np.linalg.norm(gripper_pos - right_fingertip.get_pos().cpu().numpy())
-            if action[-1] > 50 and dp_left < 0.9 and dp_right < 0.9 and not TRIAL_CAN_ADJUSTED[trial_id] and gripper_pos[2] < 0.1:
-                # get the average pos of the last 4 links 
-                grip_pos = env.get_grip_pose()
-                grip_pos[-1] = PZ
-                # make a debug sphere
-                # debug_arrow = env.scene.draw_debug_arrow(pos=gripper_pos, vec=grip_pos - gripper_pos, radius=0.01, color=(1, 0, 0, 0.5))  # Green
-                # env.scene.draw_debug_sphere(gripper_pos, 0.01, color=(0, 1, 1))
-                # env.scene.draw_debug_sphere(grip_pos, 0.01, color=(0, 0, 1))
-                env.reset(trial_id=trial_id)
-                demo_player.reset_current_demo()
+                video_frames.append(obs['image'])
 
-                env.step(get_action())
+                # if the gripper action is closing and the can is nearby, move the can and restart the demo
+                gripper_pos = env.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
+                left_fingertip = env.kinova.get_link('left_finger_dist_link')
+                right_fingertip = env.kinova.get_link('right_finger_dist_link')
+                can_pose = env.bottle.get_pos().cpu().numpy()
+                dp_left = np.linalg.norm(gripper_pos - left_fingertip.get_pos().cpu().numpy())
+                dp_right = np.linalg.norm(gripper_pos - right_fingertip.get_pos().cpu().numpy())
+                if action[-1] > 50 and dp_left < 0.9 and dp_right < 0.9 and not TRIAL_CAN_ADJUSTED[trial_id] and gripper_pos[2] < 0.1:
+                    # get the average pos of the last 4 links 
+                    grip_pos = env.get_grip_pose()
+                    grip_pos[-1] = PZ
+                    # make a debug sphere
+                    # debug_arrow = env.scene.draw_debug_arrow(pos=gripper_pos, vec=grip_pos - gripper_pos, radius=0.01, color=(1, 0, 0, 0.5))  # Green
+                    # env.scene.draw_debug_sphere(gripper_pos, 0.01, color=(0, 1, 1))
+                    # env.scene.draw_debug_sphere(grip_pos, 0.01, color=(0, 0, 1))
+                    env.reset(trial_id=trial_id)
+                    demo_player.reset_current_demo()
 
-                for _ in range(10):
-                    env.scene.step() # let the arm get back before we reset the can
+                    env.step(get_action())
 
-                env.set_can_to_pose(torch.Tensor(grip_pos))
-                print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
-                ADJUSTED_CAN_POS[trial_id] = grip_pos
-                TRIAL_CAN_ADJUSTED[trial_id] = True
-                
+                    for _ in range(10):
+                        env.scene.step() # let the arm get back before we reset the can
 
-            demonstrations[trial_id]['image'].append(obs['image'])
-            demonstrations[trial_id]['state'].append(obs['state'])
-            demonstrations[trial_id]['action'].append(action)
-            demonstrations[trial_id]['reward'].append(reward)
-            demonstrations[trial_id]['next_state'].append(next_obs['state'])
-            demonstrations[trial_id]['next_image'].append(next_obs['image'])
-            demonstrations[trial_id]['done'].append(done)
-            obs = next_obs
+                    env.set_can_to_pose(torch.Tensor(grip_pos))
+                    print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
+                    ADJUSTED_CAN_POS[trial_id] = grip_pos
+                    TRIAL_CAN_ADJUSTED[trial_id] = True
+                    
+
+                demonstrations[trial_id]['image'].append(obs['image'])
+                demonstrations[trial_id]['state'].append(obs['state'])
+                demonstrations[trial_id]['action'].append(action)
+                demonstrations[trial_id]['reward'].append(reward)
+                demonstrations[trial_id]['next_state'].append(next_obs['state'])
+                demonstrations[trial_id]['next_image'].append(next_obs['image'])
+                demonstrations[trial_id]['done'].append(done)
+                obs = next_obs
             
-            # if reward > -0.10:
-            #     print(f"Reward: {reward}")
 
+if False:
+### FOR NOW JUST PRINT OUT SUCCESS STATS ###
     # save out the ADJUSTED_CAN_POS dictionary to a file
     adjusted_can_pos_path = f'./trial_can_adjusted.npy'
     np.save(adjusted_can_pos_path, ADJUSTED_CAN_POS)
@@ -189,3 +191,4 @@ if __name__ == '__main__':
         f.write(f"Pickups: {pickups} Pickup Rate: {pickups/trials:.2%}\n")
         f.write(f"Max Reward: {max_reward}\n")
         f.write("================================================\n")
+### END FOR NOW JUST PRINT OUT SUCCESS STATS ###

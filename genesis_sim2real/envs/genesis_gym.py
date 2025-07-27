@@ -153,21 +153,24 @@ class GenesisGym(gymnasium.Env):
             )
         )
 
-        self.cam_0 = scene.add_camera(
-            fov=45,
-            GUI=True,
-        )
+        self.cam_0 = self.cam_1 = None
+        if False: # NOTE: skip cameras until demos work
+            self.cam_0 = scene.add_camera(
+                fov=45,
+                GUI=True,
+            )
 
-        self.cam_1 = scene.add_camera(
-            # pos=(0.04, 0.0, 0.75),
-            # lookat=(0.58, -BOX_WIDTH / 4, 0.02),
-            pos=(0.3, 0.6, 0.5), 
-            lookat=(0.5 ,0.0, 0.1), 
-            up=(0, 0, 1),
-            # up=(0, 1, 0),
-            fov=45,
-            GUI=False,
-        )
+            self.cam_1 = scene.add_camera(
+                # pos=(0.04, 0.0, 0.75),
+                # lookat=(0.58, -BOX_WIDTH / 4, 0.02),
+                pos=(0.3, 0.6, 0.5), 
+                lookat=(0.5 ,0.0, 0.1), 
+                up=(0, 0, 1),
+                # up=(0, 1, 0),
+                fov=45,
+                GUI=False,
+            )
+        
         
 
         # TODO: see if you can prevent the gripper from being convexified
@@ -287,11 +290,11 @@ class GenesisGym(gymnasium.Env):
         random_offset = 0.005 * torch.Tensor([torch.randn(1), torch.randn(1), 0.0])
         bottle_pos += random_offset
 
-        self.bottle.set_pos(bottle_pos); self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
-        self.goal_bottle.set_pos(STATIC_BOTTLE_POSITION); self.goal_bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
-        self.box.set_pos(self.box_pos); self.box.set_quat(torch.Tensor([1, 0, 0, 0]))
+        self.bottle.set_pos(bottle_pos.repeat((self.B, 1))); self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]).repeat((self.B, 1)))
+        self.goal_bottle.set_pos(STATIC_BOTTLE_POSITION.repeat((self.B, 1))); self.goal_bottle.set_quat(torch.Tensor([1, 0, 0, 0]).repeat((self.B, 1)))
+        self.box.set_pos(self.box_pos.repeat((self.B, 1))); self.box.set_quat(torch.Tensor([1, 0, 0, 0]).repeat((self.B, 1)))
 
-        dofs_pos = np.repeat(np.array(KINOVA_START_DOFS_POS).reshape(1, -1), B, axis=0)
+        dofs_pos = np.repeat(np.array(KINOVA_START_DOFS_POS).reshape(1, -1), self.B, axis=0)
         self.kinova.set_dofs_position(dofs_pos, self.kdofs_idx)
 
         # run a few steps to stabilize the scene
@@ -315,28 +318,24 @@ class GenesisGym(gymnasium.Env):
         return image1
 
     def get_obs(self, is_first=False, picture_in_picture=True):
-        # Get the current observation from the scene
-        # image = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
-        image = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
-        # from IPython import embed; embed(); exit(0)
-        image = image[0] # grab the rgb
-        # resize the image to the desired size
-        image = cv2.resize(image, self.size)
 
-        if picture_in_picture:
-            # grab the image from cam_0, shrink it, and put it in the corner of the main image
-            image2 = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
-            # image2 = cv2.resize(image2, (int(self.size[0] / 4), int(self.size[1] / 4)))
-            # image[:int(self.size[0] / 4), :int(self.size[1] / 4)] = image2
-            image = self.picture_in_picture(image2, image)
+        if self.cam_0:
+            # Get the current observation from the scene
+            image = self.cam_1.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)
+            image = image[0] # grab the rgb
+            image = cv2.resize(image, self.size)
 
-        if self.args['grayscale']:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            image = np.expand_dims(image, axis=-1)
+            if picture_in_picture:
+                # grab the image from cam_0, shrink it, and put it in the corner of the main image
+                image2 = self.cam_0.render(rgb=True, depth=False, segmentation=False, normal=False, use_imshow=False)[0]
+                image = self.picture_in_picture(image2, image)
 
-        # image = None
-        # if not image:
-        #     image = np.zeros((*self.size, 3), dtype=np.uint8)
+            if self.args['grayscale']:
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                image = np.expand_dims(image, axis=-1)
+        else:
+            # placeholder for image
+            image = np.zeros((self.B, 16, 16, 3), dtype=np.uint8)
 
         arm_pos = self.kinova.get_dofs_position(dofs_idx_local=self.kdofs_idx).cpu().numpy()
 
@@ -345,11 +344,11 @@ class GenesisGym(gymnasium.Env):
         eef_lin_vel = self.eef_link.get_vel().cpu().numpy() # linear velocity
         eef_ang_vel = self.eef_link.get_ang().cpu().numpy() # angular velocity
         bottle_pos = self.bottle.get_pos().cpu().numpy()
-        finger_joint_pos = [arm_pos[-4]]
+        finger_joint_pos = np.expand_dims(arm_pos[:, -4], axis=-1)
         # state = np.concatenate((eef_pos, eef_euler, eef_lin_vel, eef_ang_vel, bottle_pos, finger_joint_pos))
         
-        arm_no_gripper_pos = arm_pos[:-4]
-        state = np.concatenate((arm_no_gripper_pos, bottle_pos, finger_joint_pos))
+        arm_no_gripper_pos = arm_pos[:, :-4]
+        state = np.concatenate((arm_no_gripper_pos, bottle_pos, finger_joint_pos), axis=-1)
 
         self.last_arm_dofs = arm_pos
 
@@ -369,10 +368,10 @@ class GenesisGym(gymnasium.Env):
         
         if motor_cmd > 0.5: motor_cmd = max([1.0], motor_cmd) # make the gripper close more
 
-        right_error = pos[-4] + motor_cmd; right_error = right_error if abs(right_error) > threshold else [0.0]
-        left_error = pos[-3] - motor_cmd; left_error = left_error if abs(left_error) > threshold else [0.0]
-        right_fingertip_error = pos[-2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error = right_fingertip_error if abs(right_fingertip_error) > threshold else 0.0
-        left_fingertip_error = pos[-1] - KINOVA_START_DOFS_POS[-1]; left_fingertip_error = left_fingertip_error if abs(left_fingertip_error) > threshold else 0.0
+        right_error = pos[:, -4] + motor_cmd; right_error[abs(right_error) <= threshold] = 0
+        left_error = pos[:, -3] - motor_cmd; left_error[abs(left_error) <= threshold] = 0
+        # right_fingertip_error = pos[:, -2] - KINOVA_START_DOFS_POS[-2]; right_fingertip_error[abs(right_fingertip_error) <= threshold] = 0
+        # left_fingertip_error = pos[:, -1] - KINOVA_START_DOFS_POS[-1]; left_fingertip_error[abs(left_fingertip_error) <= threshold] = 0
 
         output_force[0] = -self.gripper_kp*right_error[0];# output_force[2] = self.kp*right_fingertip_error
         output_force[1] = -self.gripper_kp*left_error[0]; #output_force[3] = self.kp*left_fingertip_error
@@ -435,30 +434,33 @@ class GenesisGym(gymnasium.Env):
             goal_pos = self.goal_bottle.get_pos()
             distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
 
-            if bottle_pos[2].cpu().numpy().item() >= 0.14: # Give some shaped reward, if you lift the bottle you get a reward
-                reward += 0.01
 
-            if plane_contacts['position'].shape[0] > 0:
-                # print(f"CONTACT with plane.")
-                reward -= 0.001
+
+            # TODO: Parallelize this
+            # if bottle_pos[2].cpu().numpy().item() >= 0.14: # Give some shaped reward, if you lift the bottle you get a reward
+            #     reward += 0.01
+            # TODO: Parallelize this
+            # if plane_contacts['position'].shape[0] > 0:
+            #     # print(f"CONTACT with plane.")
+            #     reward -= 0.001
             
-            if distance < 0.09: # and vstate[-1] < -0.5: # open gripper and close to goal
+            done = distance < 0.08 # and vstate[-1] < -0.5 # open gripper and close to goal
+            reward = -distance # reward is negative distance to goal
+            # reward = done * 100 # reward is negative distance to goal
+
+
+            # TODO: Parallelize this
+            # if distance < 0.08: # and vstate[-1] < -0.5: # open gripper and close to goal
                 # make sure the gripper and bottle are not in collision
-                bottle_contacts = self.kinova.get_contacts(self.bottle)
-                if bottle_contacts['position'].shape[0] > 0:
-                    pass # Don't reward until the bottle is released
-                    # print(f"CONTACT with bottle at distance {distance.item():.2f} {vstate[-1]:.2f}")
-                    # reward -= 0.001
-                else:
-                    print(f"SUCCESS! {distance.item():.2f} {vstate[-1]:.2f}")
-                    reward = 10.
-                    done = True
-
-            # elif distance < 0.15:
-            #     print(f"{distance.item():.2f} {vstate[-1]:.2f} ")
-
-            # print(f'{vstate[-1]:+1.2f}')
-            # cup slide contact
+                # bottle_contacts = self.kinova.get_contacts(self.bottle)
+                # if bottle_contacts['position'].shape[0] > 0:
+                #     pass # Don't reward until the bottle is released
+                #     # print(f"CONTACT with bottle at distance {distance.item():.2f} {vstate[-1]:.2f}")
+                #     # reward -= 0.001
+                # else:
+                #     print(f"SUCCESS! {distance.item():.2f} {vstate[-1]:.2f}")
+                #     reward = 10.
+                #     done = True
         else:
             # Pick up the cup, and penalize for contact with the ground plane.
             if self.args['env_name'] == 'point':
@@ -486,6 +488,7 @@ class GenesisGym(gymnasium.Env):
         return reward, done
 
     def update_camera_position(self):
+        if not self.cam_0: return
         # Update the camera position based on the end effector position
         wrist = self.eef_link
         position = wrist.get_pos() + self.wrist_pos_offset
@@ -501,7 +504,7 @@ class GenesisGym(gymnasium.Env):
         # self.scene.draw_debug_sphere(position, 0.01, color=(0, 1, 0))
 
         # self.cam_0.set_pose(pos=np.repeat(position.cpu().numpy().reshape(1, -1), self.B, axis=0), lookat=np.repeat(middle.cpu().numpy().reshape(1, -1), self.B, axis=0), up=(0, 0, 1))
-        self.cam_0.set_pose(pos=position.cpu().numpy(), lookat=middle.cpu().numpy(), up=(0, 0, 1))
+        self.cam_0.set_pose(pos=position.cpu().numpy()[0, :], lookat=middle.cpu().numpy()[0, :], up=(0, 0, 1))
         
 
     def get_grip_pose(self):
@@ -546,7 +549,7 @@ if __name__ == '__main__':
     parser.add_argument('--subsample', type=int, default=1, help='Subsample ratio for the demos')
     args = parser.parse_args()
 
-    use_eef = True
+    use_eef = False
 
 
 
@@ -609,10 +612,10 @@ if __name__ == '__main__':
             steps += 1
             # print(action)
             next_obs, reward, done, *_ = env.step(action)
-            if args.vis: 
-                img = next_obs['image']
-                cv2.imshow('image', img)
-                cv2.waitKey(1)
+            # if args.vis: 
+            #     img = next_obs['image']
+            #     cv2.imshow('image', img)
+            #     cv2.waitKey(1)
             if reward > max_reward:
                 max_reward = reward
 
