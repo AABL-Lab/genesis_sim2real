@@ -24,7 +24,7 @@ DEFAULT_RHO = 2000
 DEFAULT_FRICTION = 0.5
 DEFAULT_STARTING_X = 0.65
 
-class GenesisGym():
+class GenesisGym(gym.Env):
     # Locations where the robot can move to?
     # Change action space to use relative movements
     action_space = spaces.Box(
@@ -49,7 +49,19 @@ class GenesisGym():
             'env_name': kwargs.env_name if hasattr(kwargs, 'env_name') else 'lift',
             # 'starting_x': args.starting_x if hasattr(args, 'starting_x') else 0.65
             }
-        
+                super().__init__()
+
+        self.init_env()
+        self.reset()
+
+        # Define observation and action spaces
+        # You can refine these later
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)  # EEF position
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)        # delta x,y,z
+
+        # Target position
+        self.target_pos = self.sim.obj_plastic.get_pos().cpu().numpy()
+
     def init_env(self):
         BOTTLE_RADIUS = self.args['radius']
         BOTTLE_HEIGHT = self.args['height']
@@ -188,11 +200,28 @@ class GenesisGym():
         return (0.0, 0.0, 0.0, gripper_open_signal)
     
     def step(self, action):
-        self.apply_action(action)
+        #print("New trial running")
+        action = np.clip(action, -1.0, 1.0)
+        delta = action[:3] * 0.02  # (dx, dy, dz)
+        gripper_control = action[3]  # [-1, +1]
+
+        # Scale gripper value from [-1,1] → [0, 100]
+        gripper_pos = np.interp(gripper_control, [-1.0, 1.0], [0, 100])
+
+        # Full action = [dx, dy, dz, rx, ry, rz, gripper]
+        full_action = np.concatenate([delta, [0, 0, 0], [gripper_pos]])
+        self.apply_action(full_action)
 
         for i in range(10):
             self.scene.step()
-    
+
+        obs = self._get_obs()
+        reward = self._compute_reward(obs, gripper_pos)
+        terminated = reward > 0.5  # Change this as needed
+        truncated = False
+
+        return obs, reward, terminated, truncated, {}
+
     def _get_obs(self):
         eef_pos = self.sim.eef.get_pos().cpu().numpy()
         dofs = self.sim.kinova.get_dofs_position(dofs_idx_local=self.sim.kdofs_idx).cpu().numpy()
@@ -269,65 +298,7 @@ class GenesisGym():
         print(f"Visible top Z-particles: {visible_z.shape[0]} points")
 
         return visible_z
-
-import gymnasium as gym
-from gymnasium import spaces
-import numpy as np
-
-class GenesisGymWrapper(gym.Env):
-    def __init__(self):
-        super().__init__()
-        self.sim = GenesisGym()
-        self.sim.init_env()
-        self.sim.reset()
-
-        # Define observation and action spaces
-        # You can refine these later
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)  # EEF position
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)        # delta x,y,z
-
-        # Target position
-        self.target_pos = self.sim.obj_plastic.get_pos().cpu().numpy()
-
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-
-        # Fully reset the Genesis environment
-        self.sim.reset()
-
-        # Reset internal target reference
-        self.target_pos = self.sim.obj_plastic.get_pos().cpu().numpy()
-
-        # Get initial observation
-        obs = self._get_obs()
-        return obs, {}
-
-
-    def step(self, action):
-        #print("New trial running")
-        action = np.clip(action, -1.0, 1.0)
-        delta = action[:3] * 0.02  # (dx, dy, dz)
-        gripper_control = action[3]  # [-1, +1]
-
-        # Scale gripper value from [-1,1] → [0, 100]
-        gripper_pos = np.interp(gripper_control, [-1.0, 1.0], [0, 100])
-
-        # Full action = [dx, dy, dz, rx, ry, rz, gripper]
-        full_action = np.concatenate([delta, [0, 0, 0], [gripper_pos]])
-        self.sim.step(full_action)
-
-        obs = self._get_obs()
-        reward = self._compute_reward(obs, gripper_pos)
-        terminated = reward > 0.5  # Change this as needed
-        truncated = False
-
-        return obs, reward, terminated, truncated, {}
-
-
-    def _get_obs(self):
-        eef_pos = self.sim.eef.get_pos().cpu().numpy()
-        return eef_pos.astype(np.float32)
-
+    
     def _compute_reward(self, eef_pos, gripper_pos):
         clay_pos = self.sim.obj_plastic.get_pos().cpu().numpy()
         dist = np.linalg.norm(eef_pos - clay_pos)
@@ -347,6 +318,27 @@ class GenesisGymWrapper(gym.Env):
         return reward
 
 
+
+class GenesisGymWrapper(gym.Env):
+
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+
+        # Fully reset the Genesis environment
+        self.sim.reset()
+
+        # Reset internal target reference
+        self.target_pos = self.sim.obj_plastic.get_pos().cpu().numpy()
+
+        # Get initial observation
+        obs = self._get_obs()
+        return obs, {}
+
+    def _get_obs(self):
+        eef_pos = self.sim.eef.get_pos().cpu().numpy()
+        return eef_pos.astype(np.float32)
+
     def render(self):
         pass  # viewer is already shown in Genesis
 
@@ -361,15 +353,20 @@ from stable_baselines3 import PPO
 # create a PPO model from stable_baselines3
 env = GenesisGymWrapper()
 model = PPO("MlpPolicy", env, verbose=1)
+
+# learn the model 
 model.learn(total_timesteps=1000, progress_bar=True)
 model.save("PPO_model")
 
+# Load the trained agent
 model = PPO.load("PPO_model", env=env)
+
+# evaluate the trained agent
 mean_reward, std_reward = evaluate_policy(model, model.get_env(), n_eval_episodes=10)
 
+# Visualize the trained agent
 vec_env = model.get_env()
 obs = vec_env.reset()
-
 for i in range(1000):
     action, _states = model.predict(obs, deterministc=True)
     obs, rewards, dones, info = vec_env.step(action)

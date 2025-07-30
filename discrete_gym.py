@@ -48,12 +48,36 @@ class GenesisGym(gym.Env):
         # initialize observation and action space
         state_length = 4
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(6,), dtype=np.float32)
-        self.action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)  # [dx, dy, dz, gripper]
+        #self.action_space = spaces.Box(low=np.array([-1, -1, -1, -3.14, -3.14, -3.14, 0]), high=np.array([1, 1, 1, 3.14, 3.14, 3.14, 100.]), shape=(7,), dtype=np.float32)  # [dx, dy, dz, gripper]
+        # Discretize action space
+        bins = [5, 5, 5, 7, 7, 7, 10]  # dx, dy, dz, roll, pitch, yaw, gripper
+        n_actions = np.prod(bins)  # Total number of discrete actions
+        self.action_space = spaces.Discrete(n_actions)
 
         self.is_done = False
         self.trial_number = 0
         
-    
+    def unscale_action(action_index):
+        # Convert single int back to multi-index
+        bins = [5, 5, 5, 7, 7, 7, 10]
+        multi_index = np.unravel_index(action_index, bins)
+
+        # Map each index to real value
+        xyz = np.linspace(-1, 1, bins[0])
+        rpy = np.linspace(-np.pi, np.pi, bins[3])
+        gripper = np.linspace(0, 100, bins[6])
+
+        return np.array([
+            xyz[multi_index[0]],
+            xyz[multi_index[1]],
+            xyz[multi_index[2]],
+            rpy[multi_index[3]],
+            rpy[multi_index[4]],
+            rpy[multi_index[5]],
+            gripper[multi_index[6]],
+        ])
+
+
     def init_env(self):
         self.kp = kp = 5
         ########################## create a scene ##########################
@@ -316,7 +340,8 @@ class GenesisGym(gym.Env):
         #print("New trial running")
         print("stepping the scene")
 
-        action = np.clip(action, -1.0, 1.0)
+        #action = np.clip(action, -1.0, 1.0)
+        scaled_action = unscale_action(action)
         delta = action[:3] * 0.05  # (dx, dy, dz)
         gripper_control = action[3]  # [-1, +1]
 
@@ -324,8 +349,8 @@ class GenesisGym(gym.Env):
         gripper_pos = np.interp(gripper_control, [-1.0, 1.0], [0, 100])
 
         # Full action = [dx, dy, dz, rx, ry, rz, gripper]
-        full_action = np.concatenate([delta, [0, 0, 0], [gripper_pos]])
-        self.apply_action(full_action)
+        #full_action = np.concatenate([delta, [0, 0, 0], [gripper_pos]])
+        self.apply_action(scaled_action)
 
         for i in range(10):
             self.scene.step()

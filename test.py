@@ -1,4 +1,6 @@
 import os
+os.environ['PYOPENGL_PLATFORM'] = 'osmesa'  # For headless rendering
+
 import numpy as np
 import torch
 import pathlib as pl
@@ -12,7 +14,6 @@ from genesis_sim2real.envs.genesis_gym import (
     DEFAULT_STARTING_X
 )
 
-os.environ['PYOPENGL_PLATFORM'] = 'osmesa'  # For headless rendering
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Minimal Genesis Discrete Control Script')

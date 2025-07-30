@@ -1,14 +1,15 @@
+import os
+os.environ['PYOPENGL_PLATFORM'] = 'osmesa'  # For headless rendering
+
 from genesis_sim2real.envs.genesis_gym import GenesisGym
 from genesis_sim2real.envs.demo_holder import GenesisDemoHolder
 from genesis_sim2real.envs.genesis_gym import DEFAULT_FRICTION, DEFAULT_HEIGHT, DEFAULT_RADIUS, DEFAULT_RHO, DEFAULT_STARTING_X, STATIC_BOTTLE_POSITION, PZ
 import numpy as np
 import cv2
-import os
 import pathlib as pl
 import matplotlib.pyplot as plt
 import torch
 import gymnasium
-os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
 
 if __name__ == '__main__':
     import argparse
