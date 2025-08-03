@@ -515,7 +515,7 @@ class GenesisGym(gymnasium.Env):
     
     def set_can_to_pose(self, pos):
         self.bottle.set_pos(pos)
-        self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]))
+        self.bottle.set_quat(torch.Tensor([1, 0, 0, 0]).repeat((self.B, 1)))
 
     def render(self, mode='human', use_imshow=False):
         # Render the scene

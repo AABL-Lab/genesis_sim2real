@@ -22,6 +22,7 @@ if __name__ == '__main__':
     parser.add_argument('--random-agent', action='store_true', help='Use a random agent')
     parser.add_argument('--subsample', type=int, default=2, help='Subsample ratio for the demos')
     parser.add_argument('--env-name', type=str, default='lift', help='Environment name')
+    parser.add_argument('--noise-scale', type=float, default=0.02, help='Noise scale for setting cans at closed gripper position')
     args = parser.parse_args()
 
     use_eef = False
@@ -54,10 +55,11 @@ if __name__ == '__main__':
     trial_id = demo_player.get_trial_id(); demo_resets = 0
     TRIAL_CAN_ADJUSTED = defaultdict(lambda: False)
     ADJUSTED_CAN_POS = {}
+    TRIAL_SUCCESS_RATES = defaultdict(lambda: 0.0)
 
     # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
     video_frames = []
-    while True:
+    while trials < len(demo_player.demos):
         # action = env.action_space.sample()  # Sample random action
         action = get_action()
         # action = diff_eef_demo[action_idx]
@@ -91,7 +93,7 @@ if __name__ == '__main__':
                 successful_trials += sum(done)
                 
                 print(f"Trial {trial_id} done. Successful trials: {sum(done).item()} of {len(done)}. {sum(done).item()/len(done):.2%} success rate")
-
+                TRIAL_SUCCESS_RATES[trial_id] += sum(done).item() / len(done)
                 # diff_eef_demo = demo_player.convert_eef_to_diff_eef(); action_idx = 0
                 trials += 1
 
@@ -119,51 +121,59 @@ if __name__ == '__main__':
             next_obs, reward, done, *_ = env.step(action)
 
             # if args.vis: env.render(use_imshow=True)
-            if False:
+            if True:
 ### FOR NOW JUST PRINT OUT SUCCESS STATS ###
-                if reward > max_reward:
-                    max_reward = reward
+                # if reward > max_reward:
+                #     max_reward = reward
 
-                video_frames.append(obs['image'])
+                # video_frames.append(obs['image'])
 
-                # if the gripper action is closing and the can is nearby, move the can and restart the demo
-                gripper_pos = env.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
-                left_fingertip = env.kinova.get_link('left_finger_dist_link')
-                right_fingertip = env.kinova.get_link('right_finger_dist_link')
-                can_pose = env.bottle.get_pos().cpu().numpy()
-                dp_left = np.linalg.norm(gripper_pos - left_fingertip.get_pos().cpu().numpy())
-                dp_right = np.linalg.norm(gripper_pos - right_fingertip.get_pos().cpu().numpy())
-                if action[-1] > 50 and dp_left < 0.9 and dp_right < 0.9 and not TRIAL_CAN_ADJUSTED[trial_id] and gripper_pos[2] < 0.1:
-                    # get the average pos of the last 4 links 
-                    grip_pos = env.get_grip_pose()
-                    grip_pos[-1] = PZ
-                    # make a debug sphere
-                    # debug_arrow = env.scene.draw_debug_arrow(pos=gripper_pos, vec=grip_pos - gripper_pos, radius=0.01, color=(1, 0, 0, 0.5))  # Green
-                    # env.scene.draw_debug_sphere(gripper_pos, 0.01, color=(0, 1, 1))
-                    # env.scene.draw_debug_sphere(grip_pos, 0.01, color=(0, 0, 1))
-                    env.reset(trial_id=trial_id)
-                    demo_player.reset_current_demo()
+                try:
+                    # if the gripper action is closing and the can is nearby, move the can and restart the demo
+                    gripper_pos = env.kinova.get_link('end_effector_link').get_pos().cpu().numpy()
+                    left_fingertip = env.kinova.get_link('left_finger_dist_link')
+                    right_fingertip = env.kinova.get_link('right_finger_dist_link')
+                    can_pose = env.bottle.get_pos().cpu().numpy()
+                    dp_left = np.linalg.norm(gripper_pos - left_fingertip.get_pos().cpu().numpy(), axis=1)
+                    dp_right = np.linalg.norm(gripper_pos - right_fingertip.get_pos().cpu().numpy(), axis=1)
+                    if action[-1] > 50 and np.mean(dp_left) < 0.9 and np.mean(dp_right) < 0.9 and not TRIAL_CAN_ADJUSTED[trial_id] and np.mean(gripper_pos[...,2]) < 0.1:
+                        # get the average pos of the last 4 links 
+                        grip_pos = env.get_grip_pose()
+                        grip_pos[..., -1] = PZ
+                        # make a debug sphere
+                        # debug_arrow = env.scene.draw_debug_arrow(pos=gripper_pos, vec=grip_pos - gripper_pos, radius=0.01, color=(1, 0, 0, 0.5))  # Green
+                        # env.scene.draw_debug_sphere(gripper_pos, 0.01, color=(0, 1, 1))
+                        # env.scene.draw_debug_sphere(grip_pos, 0.01, color=(0, 0, 1))
+                        env.reset(trial_id=trial_id)
+                        demo_player.reset_current_demo()
 
-                    env.step(get_action())
+                        env.step(get_action())
 
-                    for _ in range(10):
-                        env.scene.step() # let the arm get back before we reset the can
+                        for _ in range(30):
+                            env.scene.step() # let the arm get back before we reset the can
 
-                    env.set_can_to_pose(torch.Tensor(grip_pos))
-                    print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
-                    ADJUSTED_CAN_POS[trial_id] = grip_pos
-                    TRIAL_CAN_ADJUSTED[trial_id] = True
-                    
+                        # Add random noise to the grip position
+                        noise = np.random.random(grip_pos.shape) * args.noise_scale
+                        grip_pos += noise
 
-                demonstrations[trial_id]['image'].append(obs['image'])
-                demonstrations[trial_id]['state'].append(obs['state'])
-                demonstrations[trial_id]['action'].append(action)
-                demonstrations[trial_id]['reward'].append(reward)
-                demonstrations[trial_id]['next_state'].append(next_obs['state'])
-                demonstrations[trial_id]['next_image'].append(next_obs['image'])
-                demonstrations[trial_id]['done'].append(done)
+                        env.set_can_to_pose(torch.Tensor(grip_pos))
+                        print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
+                        ADJUSTED_CAN_POS[trial_id] = grip_pos
+                        TRIAL_CAN_ADJUSTED[trial_id] = True
+                except Exception as e:
+                    print(f"Error adjusting can position: {e}")
+
+                # demonstrations[trial_id]['image'].append(obs['image'])
+                # demonstrations[trial_id]['state'].append(obs['state'])
+                # demonstrations[trial_id]['action'].append(action)
+                # demonstrations[trial_id]['reward'].append(reward)
+                # demonstrations[trial_id]['next_state'].append(next_obs['state'])
+                # demonstrations[trial_id]['next_image'].append(next_obs['image'])
+                # demonstrations[trial_id]['done'].append(done)
                 obs = next_obs
             
+    for k,v in TRIAL_SUCCESS_RATES.items():
+        print(f"Trial {k} success rate: {v:.2%}")
 
 if False:
 ### FOR NOW JUST PRINT OUT SUCCESS STATS ###
@@ -192,3 +202,4 @@ if False:
         f.write(f"Max Reward: {max_reward}\n")
         f.write("================================================\n")
 ### END FOR NOW JUST PRINT OUT SUCCESS STATS ###
+
