@@ -423,13 +423,13 @@ class GenesisGym(gymnasium.Env):
         self.kinova.control_dofs_position(arm_poss, dofs_idx_local=self.kdofs_idx[:len(arm_poss[0])])
 
     def compute_reward(self, vstate):
-        reward = 0.
-        done = False
+        reward = np.zeros(self.B, dtype=float)
+        done = np.array([False] * self.B, dtype=bool)
         bottle_pos = self.bottle.get_pos()
 
 
         plane_contacts = self.kinova.get_contacts(self.plane)
-        if DO_REAL_TASK := True:
+        if DO_REAL_TASK := False:
             # Cup to goal distance
             goal_pos = self.goal_bottle.get_pos()
             distance = torch.linalg.norm(bottle_pos - goal_pos, ord=2, dim=-1, keepdim=True)
@@ -468,21 +468,16 @@ class GenesisGym(gymnasium.Env):
                 goal_pos = self.goal_bottle.get_pos().cpu().numpy()
                 distance = np.linalg.norm(eef_joint_pos - goal_pos, ord=2)
                 reward -= distance
-                if distance < 0.1:
-                    print(f"SUCCESS!")
-                    reward = 1.
-                    done = True
-                # else:
-                    # print the points and distance
-                    # print(f"Distance: {distance:.2f}, EEF pos: {eef_joint_pos}, Goal pos: {goal_pos}")
+                done = distance < 0.1
             else:
-                if plane_contacts['position'].shape[0] > 0:
-                    # print(f"CONTACT with plane.")
-                    reward -= 0.001
-                elif bottle_pos[2].cpu().numpy().item() >= 0.14: # lift task
-                    print(f"SUCCESS!")
-                    reward = 1.
-                    done = True
+                # if plane_contacts['position'].shape[0] > 0:
+                #     # print(f"CONTACT with plane.")
+                #     reward -= 0.001
+                # elif bottle_pos[2].cpu().numpy().item() >= 0.14: # lift task
+                #     print(f"SUCCESS!")
+                #     reward = 1.
+                #     done = np.array([True] * self.B, dtype=bool)
+                done = bottle_pos[..., 2].cpu().numpy() >= 0.14 # lift task
             ## pick up cup
 
         return reward, done

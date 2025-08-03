@@ -157,7 +157,7 @@ if __name__ == '__main__':
                         grip_pos += noise
 
                         env.set_can_to_pose(torch.Tensor(grip_pos))
-                        print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
+                        # print("Gripper closing and can is nearby, restarting demo and setting can to gripper pose")
                         ADJUSTED_CAN_POS[trial_id] = grip_pos
                         TRIAL_CAN_ADJUSTED[trial_id] = True
                 except Exception as e:
@@ -172,9 +172,21 @@ if __name__ == '__main__':
                 # demonstrations[trial_id]['done'].append(done)
                 obs = next_obs
             
+    avg_success_rates = sum(TRIAL_SUCCESS_RATES.values()) / len(TRIAL_SUCCESS_RATES) if TRIAL_SUCCESS_RATES else 0.0
+    print(f"Average success rate across trials: {avg_success_rates:.2%}")
     for k,v in TRIAL_SUCCESS_RATES.items():
         print(f"Trial {k} success rate: {v:.2%}")
 
+    # make a results directory if it doesn't exist
+    pl.Path('./results').mkdir(parents=True, exist_ok=True)
+    # write out the arguments and results to a file
+    import datetime
+    fn = f'./results/{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_{avg_success_rates:.2f}_results.txt'
+    with open(fn, 'w') as f:
+        f.write(f"Arguments: {args}\n")
+        for k,v in TRIAL_SUCCESS_RATES.items():
+            f.write(f"Trial {k} success rate: {v:.2%}\n")
+        f.write("================================================\n")
 if False:
 ### FOR NOW JUST PRINT OUT SUCCESS STATS ###
     # save out the ADJUSTED_CAN_POS dictionary to a file
