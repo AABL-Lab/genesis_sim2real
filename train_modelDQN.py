@@ -56,10 +56,12 @@ gripper_close_signal = -100
 
 from stable_baselines3 import DQN
 from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.env_checker import check_env
 
 # create an instance of the genesis environment
 env = GenesisGym()
 env.init_env()
+check_env(env)
 #env.reset()
 #env.set_viewer(True)
 
